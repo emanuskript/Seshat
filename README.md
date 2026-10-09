@@ -55,6 +55,61 @@ Default frontend URL: `http://localhost:8081`
 
 The frontend proxies ML calls from `/ml/*` to `http://localhost:5001` via `vue.config.js`.
 
+## IIIF compatibility
+
+Seshat accepts IIIF Presentation API 2 and 3 manifests as well as direct image
+URLs. The shared parser in `src/services/iiifService.js` preserves canvas order
+and identity, reads v2 sequences/canvases and v3 AnnotationPages, accepts both
+`id`/`@id` and `type`/`@type`, and selects only image-bearing painting
+annotations. Multiple image alternatives on one canvas remain one manuscript
+page.
+
+Image API 2 and 3 services are resolved from the painting body. Seshat fetches
+`info.json` before initializing OpenSeadragon:
+
+- services advertising tiles are passed to OpenSeadragon as IIIF tile sources;
+- non-tiled services use an advertised, appropriately sized derivative;
+- Image API 3 uses `max` rather than the invalid v2-only `full` size keyword;
+- a valid image URL supplied by the manifest is retained as the fallback when
+  `info.json` is unavailable.
+
+Manifest and image-service metadata requests have a 15-second timeout and at
+most two retries with exponential backoff for network errors, timeouts, HTTP
+408/425/429, and HTTP 5xx responses. Permanent HTTP errors, malformed JSON, and
+non-manifest JSON are not retried. Failed manifest requests are never silently
+reinterpreted as image URLs. The viewer displays a retryable error state instead
+of an indefinite spinner.
+
+Both reference providers currently allow browser CORS requests, so no manifest
+proxy is required:
+
+- e-codices Presentation v2:
+  `https://www.e-codices.unifr.ch/metadata/iiif/csg-1394/manifest.json`
+- Bayerische Staatsbibliothek Presentation v3:
+  `https://api.digitale-sammlungen.de/iiif/presentation/v3/bsb00075075/manifest`
+
+Deterministic tests use captured provider fixtures and do not require network
+access:
+
+```bash
+npm run test:iiif
+```
+
+An optional live integration check fetches both manifests, resolves their first
+Image API service, and validates a first-page image response:
+
+```bash
+npm run test:iiif:live
+```
+
+Run the complete frontend service suite, lint, and production build with:
+
+```bash
+npm test
+npm run lint
+npm run build
+```
+
 ### 5) (Optional) Run collaboration server (terminal C)
 
 ```bash

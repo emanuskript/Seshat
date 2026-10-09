@@ -1,0 +1,91 @@
+{
+  "@context": "http://iiif.io/api/presentation/3/context.json",
+  "id": "https://api.digitale-sammlungen.de/iiif/presentation/v3/bsb00075075/manifest",
+  "type": "Manifest",
+  "label": {
+    "none": ["Quattuor Evangelia - Uta-Evangelistar (Uta-Codex) - BSB Clm 13601"]
+  },
+  "items": [
+    {
+      "id": "https://api.digitale-sammlungen.de/iiif/presentation/v3/bsb00075075/canvas/1",
+      "type": "Canvas",
+      "label": { "none": ["Vorderdeckel (0001)"] },
+      "width": 4978,
+      "height": 7009,
+      "items": [
+        {
+          "id": "https://api.digitale-sammlungen.de/iiif/presentation/v3/bsb00075075/page/1-1",
+          "type": "AnnotationPage",
+          "items": [
+            {
+              "id": "https://api.digitale-sammlungen.de/iiif/presentation/v3/bsb00075075/anno/1-1",
+              "type": "Annotation",
+              "motivation": "painting",
+              "target": "https://api.digitale-sammlungen.de/iiif/presentation/v3/bsb00075075/canvas/1",
+              "body": {
+                "id": "https://api.digitale-sammlungen.de/iiif/image/v3/bsb00075075_00001/full/max/0/default.jpg",
+                "type": "Image",
+                "format": "image/jpeg",
+                "width": 4978,
+                "height": 7009,
+                "service": [
+                  {
+                    "id": "https://api.digitale-sammlungen.de/iiif/image/v3/bsb00075075_00001",
+                    "type": "ImageService3",
+                    "profile": "level2"
+                  }
+                ]
+              }
+            },
+            {
+              "id": "https://api.digitale-sammlungen.de/iiif/presentation/v3/bsb00075075/anno/1-ocr",
+              "type": "Annotation",
+              "motivation": "supplementing",
+              "body": { "id": "https://example.org/ocr/1.txt", "type": "Text", "format": "text/plain" }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "https://api.digitale-sammlungen.de/iiif/presentation/v3/bsb00075075/canvas/2",
+      "type": "Canvas",
+      "label": { "none": ["Vorderer Spiegel (0002)"] },
+      "width": 4902,
+      "height": 6976,
+      "items": [
+        {
+          "id": "https://api.digitale-sammlungen.de/iiif/presentation/v3/bsb00075075/page/2-1",
+          "type": "AnnotationPage",
+          "items": [
+            {
+              "id": "https://api.digitale-sammlungen.de/iiif/presentation/v3/bsb00075075/anno/2-1",
+              "type": "Annotation",
+              "motivation": "painting",
+              "target": "https://api.digitale-sammlungen.de/iiif/presentation/v3/bsb00075075/canvas/2",
+              "body": [
+                {
+                  "id": "https://api.digitale-sammlungen.de/iiif/image/v3/bsb00075075_00002/full/max/0/default.jpg",
+                  "type": "Image",
+                  "format": "image/jpeg",
+                  "width": 4902,
+                  "height": 6976,
+                  "service": {
+                    "id": "https://api.digitale-sammlungen.de/iiif/image/v3/bsb00075075_00002",
+                    "type": "ImageService3",
+                    "profile": "level2"
+                  }
+                },
+                {
+                  "id": "https://api.digitale-sammlungen.de/iiif/image/v3/bsb00075075_00002/full/1200,/0/default.jpg",
+                  "type": "Image",
+                  "format": "image/jpeg"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

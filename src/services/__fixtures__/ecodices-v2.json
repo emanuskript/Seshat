@@ -1,0 +1,65 @@
+{
+  "@context": "http://iiif.io/api/presentation/2/context.json",
+  "@id": "https://e-codices.ch/metadata/iiif/csg-1394/manifest.json",
+  "@type": "sc:Manifest",
+  "label": "St. Gallen, Stiftsbibliothek, olim Cod. Sang. 1394",
+  "sequences": [
+    {
+      "@type": "sc:Sequence",
+      "canvases": [
+        {
+          "@id": "https://e-codices.ch/metadata/iiif/csg-1394/canvas/csg-1394_e001.json",
+          "@type": "sc:Canvas",
+          "label": "Front cover",
+          "height": 6496,
+          "width": 4872,
+          "images": [
+            {
+              "@id": "https://e-codices.ch/metadata/iiif/csg-1394/annotation/csg-1394_e001.json",
+              "@type": "oa:Annotation",
+              "motivation": "sc:painting",
+              "resource": {
+                "@id": "https://media.e-codices.ch/iip/csg/csg-1394/csg-1394_e001.jp2/full/full/0/default.jpg",
+                "@type": "dctypes:Image",
+                "format": "image/jpeg",
+                "height": 6496,
+                "width": 4872,
+                "service": {
+                  "@context": "http://iiif.io/api/image/2/context.json",
+                  "@id": "https://media.e-codices.ch/iip/csg/csg-1394/csg-1394_e001.jp2",
+                  "profile": "http://iiif.io/api/image/2/level2.json"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "@id": "https://e-codices.ch/metadata/iiif/csg-1394/canvas/csg-1394_e005.json",
+          "@type": "sc:Canvas",
+          "label": "Front paste-down",
+          "height": 6496,
+          "width": 4872,
+          "images": [
+            {
+              "@id": "https://e-codices.ch/metadata/iiif/csg-1394/annotation/csg-1394_e005.json",
+              "@type": "oa:Annotation",
+              "motivation": "sc:painting",
+              "resource": {
+                "@id": "https://media.e-codices.ch/iip/csg/csg-1394/csg-1394_e005.jp2/full/full/0/default.jpg",
+                "@type": "dctypes:Image",
+                "format": "image/jpeg",
+                "height": 6496,
+                "width": 4872,
+                "service": {
+                  "@context": "http://iiif.io/api/image/2/context.json",
+                  "@id": "https://media.e-codices.ch/iip/csg/csg-1394/csg-1394_e005.jp2",
+                  "profile": "http://iiif.io/api/image/2/level2.json"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

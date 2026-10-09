@@ -1,0 +1,21 @@
+{
+  "@context": "http://iiif.io/api/image/3/context.json",
+  "id": "https://api.digitale-sammlungen.de/iiif/image/v3/bsb00075075_00001",
+  "type": "ImageService3",
+  "protocol": "http://iiif.io/api/image",
+  "profile": "level2",
+  "width": 4978,
+  "height": 7009,
+  "sizes": [
+    { "type": "Size", "width": 4978, "height": 7009 },
+    { "type": "Size", "width": 2489, "height": 3505 },
+    { "type": "Size", "width": 1245, "height": 1753 },
+    { "type": "Size", "width": 623, "height": 877 },
+    { "type": "Size", "width": 312, "height": 439 },
+    { "type": "Size", "width": 156, "height": 220 }
+  ],
+  "preferredFormats": ["jpg", "webp", "png"],
+  "extraFeatures": ["sizeUpscaling", "mirroring", "rotationArbitrary", "profileLinkHeader", "canonicalLinkHeader"],
+  "extraFormats": ["tif", "gif", "jp2", "webp"],
+  "extraQualities": ["bitonal"]
+}

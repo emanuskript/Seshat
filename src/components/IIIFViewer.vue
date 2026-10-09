@@ -91,6 +91,34 @@
         <!-- OpenSeadragon Container -->
         <div ref="osdContainer" class="absolute inset-0"></div>
 
+        <div
+          v-if="iiifLoading || imageLoading"
+          class="iiif-status-overlay"
+          role="status"
+          aria-live="polite"
+        >
+          <div class="iiif-status-card">
+            <span class="iiif-spinner" aria-hidden="true"></span>
+            <span>{{ iiifLoading ? 'Loading and validating IIIF manifest…' : 'Loading manuscript page…' }}</span>
+          </div>
+        </div>
+
+        <div
+          v-else-if="iiifError"
+          class="iiif-status-overlay"
+          role="alert"
+          aria-live="assertive"
+        >
+          <div class="iiif-status-card iiif-error-card">
+            <strong>Unable to load IIIF content</strong>
+            <p>{{ iiifError }}</p>
+            <div class="iiif-error-actions">
+              <button type="button" @click="retryCurrentSource">Retry</button>
+              <button type="button" class="secondary" @click="goHome">Choose another source</button>
+            </div>
+          </div>
+        </div>
+
         <!-- Event Intercept Layer - captures events when tools are active -->
         <div
           v-show="isAnyToolActive"
@@ -1337,7 +1365,15 @@ import ViewerBottomBar from "@/components/viewer/ViewerBottomBar.vue";
 import ViewerRightPanel from "@/components/viewer/ViewerRightPanel.vue";
 import OpenSeadragon from "openseadragon";
 import "openseadragon-filtering";
-import { extractServiceId, fetchImageInfo, buildTileSource } from "@/services/iiifService";
+import {
+  buildImageRequestUrl,
+  buildRegionRequestUrl,
+  extractServiceId,
+  fetchImageInfo,
+  formatIIIFError,
+  loadIIIFSource,
+  resolveOpenSeadragonSource,
+} from "@/services/iiifService";
 import { generateCalligraphicPath, generateCalligraphicPolygon } from "@/utils/math";
 import {
   MessageSquare,
@@ -1566,6 +1602,10 @@ export default {
       versionRestoredUnsubscribe: null,
       isApplyingSessionSync: false,
       iiifManifest: '',
+      iiifPages: [],
+      iiifLoading: false,
+      imageLoading: false,
+      iiifError: '',
       jobId: null,
       remoteCursors: [],
       // Follow mode state
@@ -1764,6 +1804,7 @@ export default {
       osdImageWidth: 0,      // Image natural width from OSD
       osdImageHeight: 0,     // Image natural height from OSD
       imageDimensionsByPage: {},
+      imageInfoByPage: {},
       osdViewportBounds: null, // For triggering overlay updates
       _overlayUpdatePending: false, // RAF throttle flag for overlay updates
       isOperationInProgress: false, // Lock to prevent tool switching during drawing
@@ -2405,6 +2446,8 @@ export default {
   watch: {
     currentPage(n) {
       this.pageInput = n + 1;
+      this.iiifError = '';
+      this.imageLoaded = false;
       if (this.showMeasurementsInCm && !this.measurementScalesByPage[n]) {
         this.showMeasurementsInCm = false;
         this.showToolMessage('Centimetre mode was turned off because this page has no physical scale.');
@@ -2562,6 +2605,7 @@ export default {
 
       // Store image list as JSON so session sharing can reconstruct pages
       this.iiifManifest = JSON.stringify(this.images);
+      this.iiifPages = [];
       this.measurementScalesByPage = [];
       this.annotationsByPage = this.images.map(() => []);
       this.comments = this.images.map(() => []);
@@ -2569,13 +2613,7 @@ export default {
     }
 
     this.iiifManifest = this.source; // Store for sharing
-    const loadedAsManifest = await this.fetchIIIFImages(this.source, { silent: true });
-    if (!loadedAsManifest) {
-      this.images = [this.source];
-      this.measurementScalesByPage = [];
-      this.annotationsByPage = [ [] ];
-      this.comments = [ [] ];
-    }
+    await this.loadRemoteSource(this.source);
   },
   mounted() {
     // Force close any cropped popup on mount
@@ -3798,10 +3836,19 @@ export default {
     /* ---------- OpenSeadragon Methods ---------- */
     async initOpenSeadragon(imageUrl) {
       if (!imageUrl) return;
+      const loadToken = (this._osdLoadToken || 0) + 1;
+      this._osdLoadToken = loadToken;
+      this.imageLoading = true;
+      this.imageLoaded = false;
+      this.iiifError = '';
+
       // Wait until DOM is ready (watcher with immediate:true can fire before mount)
       if (!this.$refs.viewer) {
         await this.$nextTick();
-        if (!this.$refs.viewer) return;
+        if (!this.$refs.viewer) {
+          this.imageLoading = false;
+          return;
+        }
       }
 
       // Destroy previous viewer if exists
@@ -3819,58 +3866,77 @@ export default {
         this.osdReady = false;
       }
 
-      // Get tile source from IIIF service
-      const serviceId = extractServiceId(imageUrl);
       let tileSource;
-
-      if (serviceId) {
-        const imageInfo = await fetchImageInfo(serviceId);
-        tileSource = buildTileSource(serviceId, imageInfo);
-      } else {
-        // Fallback for non-IIIF images
-        tileSource = { type: 'image', url: imageUrl };
+      try {
+        const page = this.iiifPages[this.currentPage];
+        if (page?.image) {
+          const resolved = await resolveOpenSeadragonSource(page);
+          if (loadToken !== this._osdLoadToken) return;
+          tileSource = resolved.tileSource;
+          this.imageInfoByPage[this.currentPage] = resolved.imageInfo;
+          if (resolved.warning) {
+            console.warn(resolved.warning);
+            this.showToolMessage(resolved.warning, 8000);
+          }
+        } else {
+          tileSource = { type: 'image', url: imageUrl };
+        }
+      } catch (error) {
+        if (loadToken !== this._osdLoadToken) return;
+        this.imageLoading = false;
+        this.iiifError = `Page ${this.currentPage + 1} could not be prepared. ${formatIIIFError(error)}`;
+        console.error('Failed to resolve IIIF image service:', error);
+        return;
       }
 
-      // Create OpenSeadragon viewer
-      this.osdViewer = OpenSeadragon({
-        element: this.$refs.osdContainer,
-        tileSources: tileSource,
-        showNavigationControl: false,
-        showNavigator: false,
-        gestureSettingsMouse: {
-          clickToZoom: false,
-          dblClickToZoom: false,
-          scrollToZoom: true
-        },
-        gestureSettingsTouch: {
-          pinchToZoom: true
-        },
-        zoomPerScroll: 1 + this.zoomStep,
-        minZoomLevel: 0.25,
-        maxZoomLevel: this.maxZoom,
-        animationTime: 0.15,
-        visibilityRatio: 0.8,
-        constrainDuringPan: true,
-        autoResize: true,
-        preserveImageSizeOnResize: true,
-        immediateRender: true,
-        crossOriginPolicy: 'Anonymous',
-        // Canvas drawer required for openseadragon-filtering plugin
-        drawer: 'canvas'
-      });
+      try {
+        // Create OpenSeadragon viewer
+        this.osdViewer = OpenSeadragon({
+          element: this.$refs.osdContainer,
+          tileSources: tileSource,
+          showNavigationControl: false,
+          showNavigator: false,
+          gestureSettingsMouse: {
+            clickToZoom: false,
+            dblClickToZoom: false,
+            scrollToZoom: true
+          },
+          gestureSettingsTouch: {
+            pinchToZoom: true
+          },
+          zoomPerScroll: 1 + this.zoomStep,
+          minZoomLevel: 0.25,
+          maxZoomLevel: this.maxZoom,
+          animationTime: 0.15,
+          visibilityRatio: 0.8,
+          constrainDuringPan: true,
+          autoResize: true,
+          preserveImageSizeOnResize: true,
+          immediateRender: true,
+          crossOriginPolicy: 'Anonymous',
+          // Canvas drawer required for openseadragon-filtering plugin
+          drawer: 'canvas'
+        });
 
-      // Event handlers
-      this.osdViewer.addHandler('open', this.onOsdOpen);
-      this.osdViewer.addHandler('open-failed', this.onOsdOpenFailed);
-      this.osdViewer.addHandler('animation', this.updateOverlayPosition);
-      this.osdViewer.addHandler('animation-finish', this.updateOverlayPosition);
-      this.osdViewer.addHandler('resize', this.onOsdResize);
-      this.osdViewer.addHandler('zoom', this.onOsdZoom);
-      this.osdViewer.addHandler('pan', this.onOsdPan);
+        // Event handlers
+        this.osdViewer.addHandler('open', this.onOsdOpen);
+        this.osdViewer.addHandler('open-failed', this.onOsdOpenFailed);
+        this.osdViewer.addHandler('animation', this.updateOverlayPosition);
+        this.osdViewer.addHandler('animation-finish', this.updateOverlayPosition);
+        this.osdViewer.addHandler('resize', this.onOsdResize);
+        this.osdViewer.addHandler('zoom', this.onOsdZoom);
+        this.osdViewer.addHandler('pan', this.onOsdPan);
+      } catch (error) {
+        this.imageLoading = false;
+        this.iiifError = `OpenSeadragon could not initialize page ${this.currentPage + 1}. ${error.message || 'Unknown error.'}`;
+        console.error('Failed to initialize OpenSeadragon:', error);
+      }
     },
 
     onOsdOpen() {
       this.osdReady = true;
+      this.imageLoading = false;
+      this.iiifError = '';
       const tiledImage = this.osdViewer.world.getItemAt(0);
       if (tiledImage) {
         const size = tiledImage.getContentSize();
@@ -3902,8 +3968,12 @@ export default {
     },
 
     onOsdOpenFailed(event) {
-      console.error('Failed to load image in OpenSeadragon:', event.message);
-      alert('Failed to load image. Please try again.');
+      const detail = event?.message || event?.eventSource?.url || this.currentImage || 'unknown image request';
+      this.imageLoading = false;
+      this.osdReady = false;
+      this.imageLoaded = false;
+      this.iiifError = `Page ${this.currentPage + 1} failed to render in OpenSeadragon: ${detail}`;
+      console.error('Failed to load image in OpenSeadragon:', detail);
     },
 
     onOsdZoom(event) {
@@ -4142,13 +4212,6 @@ export default {
     },
     /* ---------- End OpenSeadragon Methods ---------- */
 
-    _normalizeIiifServiceUrl(serviceId) {
-      if (!serviceId) return null;
-      const normalized = String(serviceId).trim().replace(/\/+$/, '');
-      if (!normalized) return null;
-      return `${normalized}/full/max/0/default.jpg`;
-    },
-
     _physicalScaleFromNode(node) {
       if (!node || typeof node !== 'object') return null;
       const candidates = [node];
@@ -4225,92 +4288,42 @@ export default {
       });
     },
 
-    _extractIIIFImageUrls(manifest) {
-      if (!manifest) return [];
-
-      if (Array.isArray(manifest)) {
-        return manifest
-          .filter((item) => typeof item === 'string' && item.trim().length > 0)
-          .map((item) => item.trim());
-      }
-
-      const images = [];
-      const pushUrl = (url) => {
-        if (typeof url === 'string' && url.trim()) {
-          images.push(url.trim());
-        }
-      };
-
-      const pushFromBody = (node) => {
-        if (!node || typeof node !== 'object') return;
-
-        const services = Array.isArray(node.service) ? node.service : (node.service ? [node.service] : []);
-        const firstService = services.find((service) => service && (service.id || service['@id']));
-        const serviceId = firstService?.id || firstService?.['@id'];
-        const serviceUrl = this._normalizeIiifServiceUrl(serviceId);
-        if (serviceUrl) {
-          pushUrl(serviceUrl);
-          return;
-        }
-
-        pushUrl(node.id || node['@id']);
-      };
-
-      // IIIF Presentation API v2
-      const v2Canvases = manifest.sequences?.[0]?.canvases;
-      if (Array.isArray(v2Canvases)) {
-        v2Canvases.forEach((canvas) => {
-          const annotation = canvas?.images?.[0];
-          pushFromBody(annotation?.resource || annotation?.body);
-        });
-      }
-
-      // IIIF Presentation API v3
-      const v3Canvases = manifest.items;
-      if (Array.isArray(v3Canvases)) {
-        v3Canvases.forEach((canvas) => {
-          const annotationPages = canvas?.items;
-          if (!Array.isArray(annotationPages)) return;
-          annotationPages.forEach((annotationPage) => {
-            const annotations = annotationPage?.items;
-            if (!Array.isArray(annotations)) return;
-            annotations.forEach((annotation) => {
-              const body = annotation?.body;
-              if (Array.isArray(body)) {
-                body.forEach((entry) => pushFromBody(entry));
-              } else {
-                pushFromBody(body);
-              }
-            });
-          });
-        });
-      }
-
-      return [...new Set(images)];
-    },
-
-    async fetchIIIFImages(manifestUrl, { silent = false } = {}) {
+    async loadRemoteSource(sourceUrl) {
+      this.iiifLoading = true;
+      this.iiifError = '';
       try {
-        const response = await fetch(manifestUrl);
-        if (!response.ok) throw new Error(`Failed to fetch IIIF manifest (${response.status}).`);
-        const manifest = await response.json();
-
-        const extractedImages = this._extractIIIFImageUrls(manifest);
-        if (extractedImages.length === 0) {
-          throw new Error("No images found in IIIF manifest.");
-        }
-
-        this.images = extractedImages;
-        this.measurementScalesByPage = this._extractIiifPhysicalScales(manifest);
+        const result = await loadIIIFSource(sourceUrl);
+        this.iiifPages = result.pages;
+        this.images = result.pages.map((page) => page.image.displayUrl);
+        this.measurementScalesByPage = result.manifest
+          ? this._extractIiifPhysicalScales(result.manifest)
+          : [];
+        this.documentName = result.label || this.documentName;
+        this.currentPage = 0;
+        this.pageInput = 1;
         this.annotationsByPage = new Array(this.images.length).fill(null).map(() => []);
         this.comments = new Array(this.images.length).fill(null).map(() => []);
         return true;
-      } catch (e) {
-        if (!silent) {
-          alert("Error fetching IIIF manifest: " + e.message);
-        }
+      } catch (error) {
+        this.images = [];
+        this.iiifPages = [];
+        this.measurementScalesByPage = [];
+        this.annotationsByPage = [];
+        this.comments = [];
+        this.iiifError = formatIIIFError(error);
+        console.error('Failed to load IIIF source:', error);
         return false;
+      } finally {
+        this.iiifLoading = false;
       }
+    },
+
+    async retryCurrentSource() {
+      if (this.images.length && this.currentImage) {
+        await this.initOpenSeadragon(this.currentImage);
+        return;
+      }
+      await this.loadRemoteSource(this.iiifManifest || this.source);
     },
 
     /* ---------- Helpers ---------- */
@@ -5744,17 +5757,12 @@ cancelPenSelection() {
         if (session.iiifManifest.startsWith('[')) {
           // JSON array of image URLs (from uploaded files)
           this.images = JSON.parse(session.iiifManifest);
+          this.iiifPages = [];
           this.measurementScalesByPage = [];
           this.annotationsByPage = this.images.map(() => []);
           this.comments = this.images.map(() => []);
         } else {
-          const loadedAsManifest = await this.fetchIIIFImages(session.iiifManifest, { silent: true });
-          if (!loadedAsManifest) {
-            this.images = [session.iiifManifest];
-            this.measurementScalesByPage = [];
-            this.annotationsByPage = [ [] ];
-            this.comments = [ [] ];
-          }
+          await this.loadRemoteSource(session.iiifManifest);
         }
 
         // Load annotations from session
@@ -7047,7 +7055,12 @@ cancelPenSelection() {
         // Try IIIF region URL first (more efficient for large images)
         const serviceId = extractServiceId(this.currentImage);
         if (serviceId) {
-          const regionUrl = `${serviceId}/${Math.round(x)},${Math.round(y)},${Math.round(width)},${Math.round(height)}/full/0/default.jpg`;
+          const pageService = this.iiifPages[this.currentPage]?.image?.service || { id: serviceId };
+          const regionUrl = buildRegionRequestUrl(
+            pageService,
+            this.imageInfoByPage[this.currentPage],
+            { x, y, width, height }
+          );
 
           // Verify IIIF server supports region requests
           try {
@@ -7103,15 +7116,14 @@ cancelPenSelection() {
     },
     getExportImageUrlCandidates(url) {
       if (!url) return [];
+      const pageIndex = this.images.indexOf(url);
+      const page = pageIndex >= 0 ? this.iiifPages[pageIndex] : null;
       const serviceId = extractServiceId(url);
-      const urls = serviceId
-        ? [
-            `${serviceId}/full/!2400,2400/0/default.jpg`,
-            `${serviceId}/full/max/0/default.jpg`,
-            `${serviceId}/full/full/0/default.jpg`,
-            url,
-          ]
-        : [url];
+      const service = page?.image?.service || (serviceId ? { id: serviceId } : null);
+      const preferredUrl = service
+        ? buildImageRequestUrl(service, this.imageInfoByPage[pageIndex], { maxFallbackWidth: 2400 })
+        : null;
+      const urls = [preferredUrl, page?.image?.bodyId, url].filter(Boolean);
 
       const candidates = [];
       urls.forEach((candidateUrl) => {
@@ -9653,6 +9665,76 @@ body.cropped-popup-active *::-moz-selection {
   display: grid; place-items: center;
   color: #4b5563;
   font-size: 13px;
+}
+
+.iiif-status-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 1200;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: hsl(var(--background) / 0.82);
+  backdrop-filter: blur(2px);
+}
+
+.iiif-status-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: 680px;
+  padding: 16px 20px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 10px;
+  background: hsl(var(--card));
+  color: hsl(var(--card-foreground));
+  box-shadow: var(--shadow-lg, 0 10px 25px rgb(0 0 0 / 0.18));
+}
+
+.iiif-spinner {
+  width: 20px;
+  height: 20px;
+  flex: 0 0 auto;
+  border: 2px solid hsl(var(--muted));
+  border-top-color: hsl(var(--primary));
+  border-radius: 9999px;
+  animation: iiif-spin 0.8s linear infinite;
+}
+
+.iiif-error-card {
+  display: grid;
+  gap: 10px;
+}
+
+.iiif-error-card p {
+  margin: 0;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.iiif-error-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.iiif-error-actions button {
+  padding: 8px 12px;
+  border: 1px solid hsl(var(--primary));
+  border-radius: 6px;
+  background: hsl(var(--primary));
+  color: hsl(var(--primary-foreground));
+  cursor: pointer;
+}
+
+.iiif-error-actions button.secondary {
+  border-color: hsl(var(--border));
+  background: hsl(var(--secondary));
+  color: hsl(var(--secondary-foreground));
+}
+
+@keyframes iiif-spin {
+  to { transform: rotate(360deg); }
 }
 
 /* Popups must be the absolute top-most layer */
