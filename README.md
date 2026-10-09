@@ -186,6 +186,12 @@ After deployment, verify:
 - collaboration health at `http://<APP_HOST>/health`
 - ML health at `http://<APP_HOST>/ml/health`
 
+The deployment script also recovers from an unrelated Cloudsmith Caddy
+repository returning an error during `apt-get update`. Because this deployment
+uses Nginx, the script disables only the failing Caddy source, preserves it as a
+`*.disabled-by-seshat` backup, and retries APT. It does not uninstall an existing
+Caddy package or alter its configuration.
+
 ### Option B: Manual deployment (frontend + both backends)
 
 1. Build frontend:

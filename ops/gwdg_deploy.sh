@@ -55,6 +55,71 @@ PY_DIR="${REPO_DIR}/python-backend"
 log()  { echo "==> $*"; }
 warn() { echo "WARN: $*" >&2; }
 
+CADDY_APT_MARKER="dl.cloudsmith.io/public/caddy"
+
+disable_broken_caddy_apt_source() {
+  local source_file disabled_file
+  local disabled_count=0
+
+  # Seshat is served by Nginx. A stale or quota-blocked Caddy repository must
+  # not prevent unrelated packages from being installed. Keep each source as a
+  # recoverable backup and leave an already-installed Caddy package untouched.
+  for source_file in /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do
+    [[ -f "${source_file}" ]] || continue
+    if ! grep -Fq "${CADDY_APT_MARKER}" "${source_file}"; then
+      continue
+    fi
+
+    disabled_file="${source_file}.disabled-by-seshat"
+    if [[ -e "${disabled_file}" ]]; then
+      disabled_file="${disabled_file}.${BASHPID}"
+    fi
+    mv -- "${source_file}" "${disabled_file}"
+    warn "Disabled failing Caddy APT source: ${source_file}"
+    warn "Restore it later from: ${disabled_file}"
+    disabled_count=$((disabled_count + 1))
+  done
+
+  # Handle the uncommon case where Caddy was added directly to sources.list.
+  if [[ -f /etc/apt/sources.list ]] \
+    && grep -F "${CADDY_APT_MARKER}" /etc/apt/sources.list | grep -Eq '^[[:space:]]*deb'; then
+    if [[ ! -f /etc/apt/sources.list.before-seshat-caddy-disable ]]; then
+      cp -a /etc/apt/sources.list /etc/apt/sources.list.before-seshat-caddy-disable
+    fi
+    sed -i "\|${CADDY_APT_MARKER}| { /^[[:space:]]*#/! s|^|# disabled by Seshat deployment: |; }" \
+      /etc/apt/sources.list
+    warn "Disabled the failing Caddy entry in /etc/apt/sources.list"
+    warn "Original saved at /etc/apt/sources.list.before-seshat-caddy-disable"
+    disabled_count=$((disabled_count + 1))
+  fi
+
+  (( disabled_count > 0 ))
+}
+
+apt_update_with_recovery() {
+  local apt_log
+  apt_log="$(mktemp /tmp/seshat-apt-update.XXXXXX)"
+
+  if apt-get update -y 2>&1 | tee "${apt_log}"; then
+    rm -f "${apt_log}"
+    return 0
+  fi
+
+  if grep -Fq "${CADDY_APT_MARKER}" "${apt_log}"; then
+    warn "APT update failed because the Cloudsmith Caddy repository is unavailable."
+    if disable_broken_caddy_apt_source; then
+      rm -f "${apt_log}"
+      log "Retrying APT update without the unused Caddy repository"
+      apt-get update -y
+      return 0
+    fi
+  fi
+
+  warn "APT update failed for a reason that could not be repaired automatically."
+  rm -f "${apt_log}"
+  return 1
+}
+
 # ############################################################################
 # 1. Fix APT – nuke the Ubuntu "npm" package that conflicts with NodeSource
 # ############################################################################
@@ -82,7 +147,7 @@ fix_apt() {
   # Clean up
   apt-get autoremove -y --purge 2>/dev/null || true
   apt-get -f install -y || true
-  apt-get update -y
+  apt_update_with_recovery
 }
 
 # ############################################################################
