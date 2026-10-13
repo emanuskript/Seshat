@@ -9,11 +9,14 @@ import { initWebSocket, closeWebSocket } from './websocket/index.js'
 import { apiLimiter } from './middleware/rateLimiter.js'
 import { errorHandler, notFoundHandler } from './middleware/errorHandler.js'
 import { logger } from './utils/logger.js'
+import { prisma } from './lib/prisma.js'
+import { sessionService } from './services/SessionService.js'
 
 import sessionsRouter from './routes/sessions.js'
 import versionsRouter from './routes/versions.js'
 
 const app = express()
+app.set('trust proxy', 1)
 
 // Security middleware
 app.use(helmet({
@@ -22,7 +25,7 @@ app.use(helmet({
 
 // CORS
 app.use(cors({
-  origin: config.cors.origin,
+  origin: config.cors.origins,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: true
@@ -35,8 +38,13 @@ app.use(express.json({ limit: '10mb' }))
 app.use('/api', apiLimiter)
 
 // Health check endpoint
-app.get('/health', (req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() })
+app.get('/health', async (req, res) => {
+  try {
+    await prisma.$queryRaw`SELECT 1`
+    res.json({ status: 'ok', database: 'ok', timestamp: new Date().toISOString() })
+  } catch {
+    res.status(503).json({ status: 'error', database: 'unavailable' })
+  }
 })
 
 // API routes
@@ -55,11 +63,14 @@ const server = createServer(app)
 // Initialize WebSocket
 initWebSocket(server)
 
+let cleanupTimer = null
+
 // Graceful shutdown
 async function shutdown(signal) {
   logger.info(`Received ${signal}, shutting down gracefully...`)
 
   closeWebSocket()
+  if (cleanupTimer) clearInterval(cleanupTimer)
   await disconnectPrisma()
 
   server.close(() => {
@@ -84,10 +95,17 @@ async function start() {
     await connectPrisma()
 
     // Start listening on all interfaces (0.0.0.0) for VM/container access
-    server.listen(config.port, '0.0.0.0', () => {
-      logger.info(`Server running on 0.0.0.0:${config.port}`)
+    await sessionService.cleanupInactive()
+    cleanupTimer = setInterval(
+      () => sessionService.cleanupInactive().catch(error => logger.error('Session cleanup failed', { error: error.message })),
+      24 * 60 * 60 * 1000
+    )
+    cleanupTimer.unref()
+
+    server.listen(config.port, config.host, () => {
+      logger.info(`Server running on ${config.host}:${config.port}`)
       logger.info(`Environment: ${config.nodeEnv}`)
-      logger.info(`CORS origin: ${config.cors.origin}`)
+      logger.info(`CORS origins: ${config.cors.origins.join(', ')}`)
     })
   } catch (err) {
     logger.error('Failed to start server', { error: err.message })

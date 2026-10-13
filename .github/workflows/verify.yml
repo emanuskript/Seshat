@@ -1,0 +1,65 @@
+name: Verify
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm audit --omit=dev --audit-level=high
+      - run: npm test
+      - run: npm run lint
+      - run: npm run build
+
+  collaboration-server:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+      - run: npm ci
+        working-directory: server
+      - run: npm audit --omit=dev --audit-level=high
+        working-directory: server
+      - run: npx prisma validate
+        working-directory: server
+      - run: npx prisma generate
+        working-directory: server
+      - run: npm test
+        working-directory: server
+
+  python-backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: python-backend/requirements.txt
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -r python-backend/requirements.txt pip-audit
+      - run: python -m pip_audit -r python-backend/requirements.txt
+      - run: python -m compileall -q python-backend
+      - run: PYTHONPATH=python-backend python -m unittest discover -s python-backend -p 'test_*.py'
+
+  deployment-script:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash -n ops/gwdg_deploy.sh

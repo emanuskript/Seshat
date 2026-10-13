@@ -1,10 +1,11 @@
 import rateLimit from 'express-rate-limit'
 import { RateLimitError } from '../utils/errors.js'
+import { config } from '../config/env.js'
 
 // General API rate limiter
 export const apiLimiter = rateLimit({
-  windowMs: 60 * 1000, // 1 minute
-  max: 100, // 100 requests per minute
+  windowMs: config.rateLimit.windowMs,
+  max: config.rateLimit.maxRequests,
   standardHeaders: true,
   legacyHeaders: false,
   handler: (req, res) => {

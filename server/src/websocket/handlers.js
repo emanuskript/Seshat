@@ -71,17 +71,18 @@ export async function handleMessage(ws, message, context) {
  * Handle participant joining a session
  */
 async function handleJoin(ws, payload, context) {
-  const { sessionId, displayName, participantId: clientParticipantId } = payload || {}
+  const { sessionId, accessToken, displayName, participantId: clientParticipantId } = payload || {}
 
   if (!sessionId || !isValidUUID(sessionId)) {
     sendError(ws, 'Invalid session ID')
     return
   }
 
-  // Verify session exists
-  const exists = await sessionService.exists(sessionId)
-  if (!exists) {
-    sendError(ws, 'Session not found', 'SESSION_NOT_FOUND')
+  try {
+    await sessionService.verifyAccess(sessionId, accessToken)
+  } catch {
+    sendError(ws, 'A valid session access token is required', 'UNAUTHORIZED')
+    ws.close(1008, 'Unauthorized')
     return
   }
 

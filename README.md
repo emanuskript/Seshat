@@ -15,7 +15,7 @@ Seshat is a manuscript annotation and analysis platform. It combines:
 
 ## Prerequisites
 
-- Node.js 18+
+- Node.js 20 or 22 (20 LTS recommended)
 - npm
 - Python 3.10+ (3.11 recommended)
 - (Optional for collaboration server) Docker + Docker Compose
@@ -157,14 +157,18 @@ Checklist:
 
 ## Deployment (Server)
 
-This section is for operators deploying Seshat to a VM or server.
+The complete production runbook is [DEPLOYMENT.md](DEPLOYMENT.md). It documents
+the three processes, PostgreSQL migrations/backups, capability-token migration,
+TLS, limits, verification, and rollback.
 
 ### Option A: One-command Ubuntu deployment (recommended)
 
 Use `ops/gwdg_deploy.sh` on Ubuntu 22.04:
 
 ```bash
-sudo APP_HOST=your.server.domain bash ops/gwdg_deploy.sh
+sudo APP_HOST=your.server.domain \
+  PUBLIC_ORIGIN=https://your.server.domain \
+  bash ops/gwdg_deploy.sh
 ```
 
 What it configures:
@@ -181,7 +185,9 @@ Important environment knobs:
 - `NODE_PORT` (default `3001`), `PY_PORT` (default `5001`)
 - `DB_NAME`, `DB_USER`, `DB_PASS`
 
-After deployment, verify:
+The script fails if its local/external checks fail. It does not change firewall
+rules or issue TLS certificates. Configure DNS, ports 80/443, and TLS at Nginx
+or an upstream proxy first. Then verify:
 - frontend over `http://<APP_HOST>/`
 - collaboration health at `http://<APP_HOST>/health`
 - ML health at `http://<APP_HOST>/ml/health`
@@ -198,8 +204,10 @@ Caddy package or alter its configuration.
    - `npm ci`
    - `npm run build`
 2. Serve `dist/` with nginx.
-3. Run collaboration backend (`server/`) with Node (systemd/pm2/container).
-4. Run Python backend (`python-backend/app.py`) with a process manager.
+3. Apply `server/prisma/migrations` with `npx prisma migrate deploy`, then run
+   the collaboration backend with Node as an unprivileged service.
+4. Run the Python backend with Gunicorn as an unprivileged service; do not use
+   Flask's development server in production.
 5. Configure reverse proxy:
    - `/` → static frontend (`dist/`)
    - `/api` and `/ws` → collaboration backend
@@ -217,14 +225,6 @@ If you only want hosted ML inference while keeping your own frontend/server:
 - `server/README.md` and `server/SETUP.md` — collaboration server setup
 - `JSON_UPLOAD_FEATURE.md` — JSON upload flow details
 
-## License Recommendation
+## License
 
-For this type of platform (frontend + backend services + ML tooling), the most suitable default license is **Apache License 2.0**.
-
-Why this is a good fit:
-- permissive for research, academic, and commercial adoption,
-- includes an explicit patent grant,
-- allows private internal modifications without requiring source disclosure,
-- keeps attribution and notice requirements straightforward.
-
-If your goal is strong copyleft for hosted/network use (so modified hosted versions must also share source), consider **AGPLv3** instead.
+Licensed under Apache License 2.0. See [LICENSE](LICENSE).

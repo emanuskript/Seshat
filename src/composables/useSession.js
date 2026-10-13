@@ -1,7 +1,7 @@
 // src/composables/useSession.js
 // HTTP API + singleton WebSocket integration for collaboration sessions.
 import { ref, computed } from 'vue'
-import { sessionsApi } from '../services/api'
+import { sessionsApi, getSessionAccessToken, storeSessionAccessToken } from '../services/api'
 import { useWebSocket } from './useWebSocket'
 
 // ---------- UUID helper ------------------------------------------------------
@@ -26,6 +26,7 @@ const isLoading        = ref(false)
 const error            = ref(null)
 const localParticipant = ref(null)
 const annotations      = ref({})
+const accessToken      = ref(null)
 
 // ---------- composable -------------------------------------------------------
 export function useSession() {
@@ -40,7 +41,10 @@ export function useSession() {
       typeof window !== 'undefined' && window.location
         ? window.location.origin
         : ''
-    return `${origin}/session/${sessionId.value}`
+    const token = accessToken.value || getSessionAccessToken(sessionId.value)
+    return token
+      ? `${origin}/session/${sessionId.value}#access_token=${encodeURIComponent(token)}`
+      : ''
   })
 
   // ---- device / participant ids -----------------------------------------
@@ -75,6 +79,7 @@ export function useSession() {
       // Send the join message the server expects
       ws.send('join', {
         sessionId: sid,
+        accessToken: accessToken.value || getSessionAccessToken(sid),
         displayName: displayName || 'Anonymous',
         participantId: getParticipantId()
       })
@@ -99,6 +104,8 @@ export function useSession() {
       })
 
       sessionId.value   = response.id
+      accessToken.value = response.accessToken
+      storeSessionAccessToken(response.id, response.accessToken)
       sessionData.value  = response
       annotations.value  = ann || {}
 
@@ -116,6 +123,10 @@ export function useSession() {
     try {
       isLoading.value = true
       error.value = null
+      accessToken.value = getSessionAccessToken(id)
+      if (!accessToken.value) {
+        throw new Error('This session link is missing its access token.')
+      }
 
       // HTTP join (hits /api/sessions/:id/join — server returns session data)
       let response
@@ -159,6 +170,7 @@ export function useSession() {
     localParticipant.value = null
     annotations.value      = {}
     error.value            = null
+    accessToken.value      = null
   }
 
   // ---- HTTP: bulk annotation save (for version snapshots etc.) ----------
@@ -184,6 +196,7 @@ export function useSession() {
       isLoading.value = true
       error.value     = null
       const response = await sessionsApi.getSession(id)
+      accessToken.value = getSessionAccessToken(id)
       sessionData.value = response
       return response
     } catch (err) {
@@ -226,6 +239,7 @@ export function useSession() {
     shareUrl,
     localParticipant,
     annotations,
+    accessToken,
     // HTTP
     createSession,
     joinSession,

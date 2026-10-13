@@ -32,3 +32,9 @@ export class PayloadTooLargeError extends AppError {
     super(message, 413, 'PAYLOAD_TOO_LARGE')
   }
 }
+
+export class UnauthorizedError extends AppError {
+  constructor(message = 'A valid session access token is required') {
+    super(message, 401, 'UNAUTHORIZED')
+  }
+}

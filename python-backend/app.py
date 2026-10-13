@@ -1,16 +1,22 @@
 # app.py
 from __future__ import annotations
 import os, io, json, uuid, time, shutil, logging
+from contextlib import contextmanager
+import http.client
+import ipaddress
 import mimetypes
-import urllib.request
-from urllib.parse import urlparse
+import re
+import socket
+import ssl
+import threading
+from urllib.parse import urljoin, urlparse
 from pathlib import Path
 from typing import List, Dict, Tuple
 from datetime import datetime
 
 import cv2
 import numpy as np
-from flask import Flask, request, render_template, jsonify, abort, send_file, Response
+from flask import Flask, request, render_template, jsonify, abort, send_file, send_from_directory, Response
 from werkzeug.utils import secure_filename
 from flask_cors import CORS
 
@@ -48,14 +54,50 @@ def assign_scribe_name(index: int) -> str:
 
 # ------------------ Config ------------------
 BASE_DIR = Path(__file__).resolve().parent
-STATIC_DIR = BASE_DIR / "static"
-UPLOADS_DIR = BASE_DIR / "uploads"
+DATA_DIR = Path(os.getenv("SESHAT_DATA_DIR", str(BASE_DIR))).resolve()
+STATIC_DIR = DATA_DIR / "static"
+UPLOADS_DIR = DATA_DIR / "uploads"
 JOBS_DIR = STATIC_DIR / "jobs"
 
 ALLOWED_EXT = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".pdf"}
-MAX_CONTENT_LENGTH = 60 * 1024 * 1024  # 60MB
+MAX_CONTENT_LENGTH = int(os.getenv("SESHAT_MAX_UPLOAD_BYTES", str(60 * 1024 * 1024)))
 MAX_IMAGE_DIM = int(os.getenv("SESHAT_MAX_IMAGE_DIM", "0"))  # 0 = disabled
 EXPORT_IMAGE_MAX_BYTES = int(os.getenv("SESHAT_EXPORT_IMAGE_MAX_BYTES", str(80 * 1024 * 1024)))
+MAX_PDF_PAGES = int(os.getenv("SESHAT_MAX_PDF_PAGES", "100"))
+MAX_IMAGE_PIXELS = int(os.getenv("SESHAT_MAX_IMAGE_PIXELS", "80000000"))
+APP_ENV = os.getenv("SESHAT_ENV", "development").lower()
+CORS_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv(
+        "SESHAT_CORS_ORIGINS",
+        "http://localhost:8081,http://127.0.0.1:8081",
+    ).split(",")
+    if origin.strip()
+]
+
+def _is_valid_origin(origin: str) -> bool:
+    try:
+        parsed = urlparse(origin)
+        _port = parsed.port
+    except ValueError:
+        return False
+    return bool(
+        parsed.scheme in {"http", "https"}
+        and parsed.netloc
+        and not parsed.username
+        and not parsed.password
+        and parsed.path in {"", "/"}
+        and not parsed.params
+        and not parsed.query
+        and not parsed.fragment
+    )
+
+if APP_ENV == "production" and (
+    not CORS_ORIGINS
+    or "*" in CORS_ORIGINS
+    or any(not _is_valid_origin(origin) for origin in CORS_ORIGINS)
+):
+    raise RuntimeError("SESHAT_CORS_ORIGINS must list valid explicit origins in production")
 
 # ------------------ Morphological Line Segmentation ------------------
 def _ink_mask(binary: np.ndarray) -> np.ndarray:
@@ -109,11 +151,12 @@ def _segment_lines_morph(binary: np.ndarray) -> List[Tuple[int,int,int,int]]:
 MIN_LINE_WIDTH = 150
 MAX_LINE_HEIGHT = 800  # Increased to allow larger line segments
 
-JOB_TTL_SEC = 6 * 60 * 60  # cleanup old jobs after 6h
+JOB_TTL_SEC = int(os.getenv("SESHAT_JOB_TTL_SECONDS", str(6 * 60 * 60)))
+JOB_ID_RE = re.compile(r"^[0-9a-f]{12}$")
 
 # ------------------ App ------------------
 app = Flask(__name__)
-CORS(app)  # Enable CORS for Vue.js frontend
+CORS(app, resources={r"/*": {"origins": CORS_ORIGINS}})
 app.config["MAX_CONTENT_LENGTH"] = MAX_CONTENT_LENGTH
 
 for d in (STATIC_DIR, UPLOADS_DIR, JOBS_DIR):
@@ -129,11 +172,18 @@ def allowed_file(name: str) -> bool:
 def new_job_id() -> str:
     return uuid.uuid4().hex[:12]
 
-def job_paths(job_id: str) -> Dict[str, Path]:
+def validate_job_id(job_id: str) -> str:
+    if not JOB_ID_RE.fullmatch(job_id or ""):
+        raise ValueError("Invalid job ID")
+    return job_id
+
+def job_paths(job_id: str, create: bool = True) -> Dict[str, Path]:
+    validate_job_id(job_id)
     root = JOBS_DIR / job_id
     lines_dir = root / "lines"
-    root.mkdir(parents=True, exist_ok=True)
-    lines_dir.mkdir(parents=True, exist_ok=True)
+    if create:
+        root.mkdir(parents=True, exist_ok=True)
+        lines_dir.mkdir(parents=True, exist_ok=True)
     return {"root": root, "lines": lines_dir}
 
 def cleanup_old_jobs(ttl: int = JOB_TTL_SEC):
@@ -144,6 +194,30 @@ def cleanup_old_jobs(ttl: int = JOB_TTL_SEC):
                 shutil.rmtree(p, ignore_errors=True)
         except Exception:
             pass
+    for p in UPLOADS_DIR.glob("*"):
+        try:
+            if p.is_file() and (now - p.stat().st_mtime) > ttl:
+                p.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+_cleanup_lock = threading.Lock()
+_last_cleanup_at = 0.0
+
+@app.before_request
+def periodically_cleanup_runtime_files():
+    """Bound disk growth even when /analyze is not the next request."""
+    global _last_cleanup_at
+    now = time.monotonic()
+    if now - _last_cleanup_at < 300 or not _cleanup_lock.acquire(blocking=False):
+        return None
+    try:
+        if now - _last_cleanup_at >= 300:
+            cleanup_old_jobs()
+            _last_cleanup_at = now
+    finally:
+        _cleanup_lock.release()
+    return None
 
 def clamp_bbox(x0, y0, x1, y1, W, H):
     x0 = max(0, min(int(x0), W - 1)); x1 = max(0, min(int(x1), W))
@@ -554,6 +628,9 @@ def _extract_pages_from_pdf(pdf_bytes, output_dir):
     """Extract PDF pages as JPEG images. Returns list of (page_index, path) tuples."""
     import fitz
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    if doc.page_count > MAX_PDF_PAGES:
+        doc.close()
+        raise ValueError(f"PDF exceeds the {MAX_PDF_PAGES}-page limit")
     output_dir.mkdir(parents=True, exist_ok=True)
     pages = []
     for i, page in enumerate(doc):
@@ -617,13 +694,16 @@ def _split_double_page_if_needed(pil_image):
 
 def _downscale_image_if_needed(file_bytes, max_dim=MAX_IMAGE_DIM):
     """Downscale large images to avoid exhausting memory. Returns (new_bytes, orig_size, new_size)."""
-    if not max_dim or max_dim <= 0:
-        return file_bytes, None, None
     try:
         from PIL import Image as PILImage, ImageOps as PILImageOps
         with PILImage.open(io.BytesIO(file_bytes)) as img:
             img = PILImageOps.exif_transpose(img)
             orig_size = img.size
+            if img.width * img.height > MAX_IMAGE_PIXELS:
+                raise ValueError(f"Image exceeds the {MAX_IMAGE_PIXELS}-pixel limit")
+            img.load()
+            if not max_dim or max_dim <= 0:
+                return file_bytes, orig_size, orig_size
             if max(orig_size) <= max_dim:
                 return file_bytes, orig_size, orig_size
             scale = max_dim / float(max(orig_size))
@@ -633,14 +713,144 @@ def _downscale_image_if_needed(file_bytes, max_dim=MAX_IMAGE_DIM):
             out = io.BytesIO()
             img.save(out, format="JPEG", quality=90, optimize=True)
             return out.getvalue(), orig_size, new_size
-    except Exception as e:
-        log.warning(f"Downscale failed: {e}")
-    return file_bytes, None, None
+    except ValueError:
+        raise
+    except Exception as exc:
+        raise ValueError("Uploaded file is not a supported raster image") from exc
+
+def _validated_public_target(raw_url: str):
+    """Return a parsed URL and the exact public addresses approved for use."""
+    parsed = urlparse(raw_url)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise ValueError("A valid http(s) URL is required")
+    if parsed.username or parsed.password or parsed.fragment:
+        raise ValueError("URL credentials and fragments are not allowed")
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError("Invalid URL port") from exc
+    if port not in {None, 80, 443}:
+        raise ValueError("Only ports 80 and 443 are allowed")
+
+    try:
+        addresses = list(dict.fromkeys(
+            item[4][0].split("%", 1)[0]
+            for item in socket.getaddrinfo(
+                parsed.hostname,
+                port or (443 if parsed.scheme == "https" else 80),
+                type=socket.SOCK_STREAM,
+            )
+        ))
+    except socket.gaierror as exc:
+        raise ValueError("URL hostname could not be resolved") from exc
+
+    if not addresses:
+        raise ValueError("URL hostname did not resolve")
+    for address in addresses:
+        if not ipaddress.ip_address(address).is_global:
+            raise ValueError("Private or non-routable image hosts are not allowed")
+    return parsed, addresses
+
+def _validate_public_http_url(raw_url: str):
+    """Reject credentials, unsafe ports, and non-public network destinations."""
+    parsed, _addresses = _validated_public_target(raw_url)
+    return parsed
+
+class _PinnedHTTPConnection(http.client.HTTPConnection):
+    def __init__(self, host: str, port: int, connect_ip: str):
+        self._connect_ip = connect_ip
+        super().__init__(host, port=port, timeout=30)
+
+    def connect(self):
+        self.sock = socket.create_connection(
+            (self._connect_ip, self.port), self.timeout, self.source_address
+        )
+
+class _PinnedHTTPSConnection(http.client.HTTPSConnection):
+    def __init__(self, host: str, port: int, connect_ip: str):
+        self._connect_ip = connect_ip
+        super().__init__(host, port=port, timeout=30, context=ssl.create_default_context())
+
+    def connect(self):
+        raw_socket = socket.create_connection(
+            (self._connect_ip, self.port), self.timeout, self.source_address
+        )
+        try:
+            self.sock = self._context.wrap_socket(raw_socket, server_hostname=self.host)
+        except Exception:
+            raw_socket.close()
+            raise
+
+@contextmanager
+def _open_public_image_url(image_url: str):
+    """Fetch through the exact validated IP, revalidating every redirect."""
+    current_url = image_url
+    redirect_statuses = {301, 302, 303, 307, 308}
+    headers = {
+        "User-Agent": "Seshat/1.0 image-export",
+        "Accept": "image/avif,image/webp,image/apng,image/png,image/jpeg,image/tiff,image/*;q=0.8",
+        "Connection": "close",
+    }
+
+    for redirect_count in range(6):
+        parsed, addresses = _validated_public_target(current_url)
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        request_target = parsed.path or "/"
+        if parsed.params:
+            request_target += f";{parsed.params}"
+        if parsed.query:
+            request_target += f"?{parsed.query}"
+
+        connection = None
+        response = None
+        last_error = None
+        for address in addresses:
+            candidate = (
+                _PinnedHTTPSConnection(parsed.hostname, port, address)
+                if parsed.scheme == "https"
+                else _PinnedHTTPConnection(parsed.hostname, port, address)
+            )
+            try:
+                candidate.request("GET", request_target, headers=headers)
+                response = candidate.getresponse()
+                connection = candidate
+                break
+            except (OSError, ssl.SSLError, http.client.HTTPException) as exc:
+                last_error = exc
+                candidate.close()
+
+        if response is None or connection is None:
+            raise OSError("Could not connect to any validated image address") from last_error
+
+        if response.status in redirect_statuses:
+            location = response.headers.get("Location")
+            response.close()
+            connection.close()
+            if not location:
+                raise ValueError("Image redirect did not provide a destination")
+            current_url = urljoin(current_url, location)
+            continue
+
+        if response.status < 200 or response.status >= 300:
+            status = response.status
+            response.close()
+            connection.close()
+            raise ValueError(f"Image host returned HTTP {status}")
+
+        try:
+            yield response
+        finally:
+            response.close()
+            connection.close()
+        return
+
+    raise ValueError("Image URL exceeded the five-redirect limit")
 
 # ------------------ Routes ------------------
 @app.errorhandler(413)
 def too_large(_e):
-    return jsonify({"error": "File too large (max 20 MB)."}), 413
+    limit_mb = MAX_CONTENT_LENGTH // (1024 * 1024)
+    return jsonify({"error": f"Request too large (max {limit_mb} MB)."}), 413
 
 @app.route("/health", methods=["GET"])
 def health():
@@ -649,24 +859,19 @@ def health():
 @app.route("/export-image", methods=["GET"])
 def export_image_proxy():
     image_url = (request.args.get("url") or "").strip()
-    parsed = urlparse(image_url)
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        return jsonify({"error": "A valid http(s) image URL is required."}), 400
+    try:
+        parsed = _validate_public_http_url(image_url)
+    except ValueError:
+        return jsonify({"error": "A valid public http(s) image URL is required."}), 400
 
     try:
-        outbound = urllib.request.Request(
-            image_url,
-            headers={
-                "User-Agent": "Seshat/1.0 image-export",
-                "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
-            },
-        )
-        with urllib.request.urlopen(outbound, timeout=30) as response:
+        with _open_public_image_url(image_url) as response:
             content_type = response.headers.get("Content-Type") or mimetypes.guess_type(parsed.path)[0] or "application/octet-stream"
+            content_type = content_type.split(";", 1)[0].strip().lower()
             payload = response.read(EXPORT_IMAGE_MAX_BYTES + 1)
             if len(payload) > EXPORT_IMAGE_MAX_BYTES:
                 return jsonify({"error": "Image is too large for PDF export."}), 413
-            if not content_type.lower().startswith("image/"):
+            if not content_type.startswith("image/") or content_type == "image/svg+xml":
                 return jsonify({"error": f"URL did not return an image ({content_type})."}), 415
             return Response(payload, mimetype=content_type, headers={"Cache-Control": "public, max-age=3600"})
     except Exception as exc:
@@ -691,6 +896,7 @@ def prepare():
         raw_bytes = request.get_data() or None
 
     if not files and not raw_bytes:
+        shutil.rmtree(paths["root"], ignore_errors=True)
         return jsonify({"error": "No image provided"}), 400
 
     page_entries = []  # list of {index, path, rel}
@@ -699,11 +905,13 @@ def prepare():
         """Save image bytes as page_{index}.jpg, returns path."""
         page_path = paths["root"] / f"page_{index}.jpg"
         try:
-            img = PILImage.open(io.BytesIO(img_bytes))
-            img = PILImageOps.exif_transpose(img).convert("RGB")
-            img.save(str(page_path), "JPEG")
-        except Exception:
-            page_path.write_bytes(img_bytes)
+            with PILImage.open(io.BytesIO(img_bytes)) as source:
+                if source.width * source.height > MAX_IMAGE_PIXELS:
+                    raise ValueError(f"Image exceeds the {MAX_IMAGE_PIXELS}-pixel limit")
+                img = PILImageOps.exif_transpose(source).convert("RGB")
+                img.save(str(page_path), "JPEG")
+        except Exception as exc:
+            raise ValueError("Uploaded file is not a supported raster image") from exc
         return page_path
 
     if files:
@@ -711,6 +919,9 @@ def prepare():
         for f in files:
             fname = f.filename or ""
             ext = Path(fname).suffix.lower()
+            if ext not in ALLOWED_EXT:
+                shutil.rmtree(paths["root"], ignore_errors=True)
+                return jsonify({"error": f"Unsupported file type: {ext or 'unknown'}"}), 400
             f_bytes = f.read()
 
             if ext == ".pdf":
@@ -721,18 +932,27 @@ def prepare():
                         rel = str(pdf_page_path.relative_to(STATIC_DIR)).replace("\\", "/")
                         page_entries.append({"index": page_idx, "image": rel, "image_static": f"/static/{rel}"})
                         page_idx += 1
-                except Exception as e:
-                    log.error(f"PDF extraction failed: {e}")
-                    return jsonify({"error": f"Failed to extract PDF pages: {str(e)}"}), 500
+                except Exception as exc:
+                    log.warning(f"PDF extraction failed: {exc}")
+                    shutil.rmtree(paths["root"], ignore_errors=True)
+                    return jsonify({"error": f"Failed to extract PDF pages: {str(exc)}"}), 400
             else:
                 # Regular image
-                page_path = _save_image(f_bytes, page_idx)
+                try:
+                    page_path = _save_image(f_bytes, page_idx)
+                except ValueError as exc:
+                    shutil.rmtree(paths["root"], ignore_errors=True)
+                    return jsonify({"error": str(exc)}), 400
                 rel = str(page_path.relative_to(STATIC_DIR)).replace("\\", "/")
                 page_entries.append({"index": page_idx, "image": rel, "image_static": f"/static/{rel}"})
                 page_idx += 1
     else:
         # Raw bytes — single image
-        page_path = _save_image(raw_bytes, 1)
+        try:
+            page_path = _save_image(raw_bytes, 1)
+        except ValueError as exc:
+            shutil.rmtree(paths["root"], ignore_errors=True)
+            return jsonify({"error": str(exc)}), 400
         rel = str(page_path.relative_to(STATIC_DIR)).replace("\\", "/")
         page_entries.append({"index": 1, "image": rel, "image_static": f"/static/{rel}"})
 
@@ -774,7 +994,16 @@ def analyze():
     if file_content is None:
         prepared_job = request.form.get('prepared_job') or request.args.get('prepared_job')
         if prepared_job:
-            page_index = int(request.form.get('page_index', 0) or request.args.get('page_index', 0) or 0)
+            try:
+                validate_job_id(prepared_job)
+            except ValueError:
+                return jsonify({"error": "Invalid prepared job ID"}), 400
+            try:
+                page_index = int(request.form.get('page_index', 0) or request.args.get('page_index', 0) or 0)
+            except (TypeError, ValueError):
+                return jsonify({"error": "Invalid page index"}), 400
+            if page_index < 0 or page_index > MAX_PDF_PAGES:
+                return jsonify({"error": "Invalid page index"}), 400
             job_dir = JOBS_DIR / prepared_job
             cand = None
             if page_index > 0:
@@ -795,19 +1024,14 @@ def analyze():
             file_content = raw
             original_filename = "inline-base64.png"
 
-    # 4) Last-resort: latest prepared page on disk
-    if file_content is None:
-        latest = _find_latest_prepared_page()
-        if latest:
-            file_content = latest.read_bytes()
-            original_filename = latest.name
-            log.warning(f"No image provided; using latest prepared page: {latest}")
-
     if file_content is None:
         return jsonify({"error": "No image provided. Send 'image' file, 'prepared_job' ID, or base64 data."}), 400
 
     # Downscale if configured
-    file_content, _, _ = _downscale_image_if_needed(file_content)
+    try:
+        file_content, _, _ = _downscale_image_if_needed(file_content)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
 
     job_id = new_job_id()
     paths = job_paths(job_id)
@@ -1032,7 +1256,10 @@ def analyze():
 
 @app.route("/download_pdf/<job_id>")
 def download_pdf(job_id):
-    paths = job_paths(job_id)
+    try:
+        paths = job_paths(job_id, create=False)
+    except ValueError:
+        abort(404)
     pdf_path = paths["root"] / "scribe_analysis_report.pdf"
     
     if not pdf_path.exists():
@@ -1048,10 +1275,7 @@ def download_pdf(job_id):
 @app.route("/static/<path:filename>")
 def static_files(filename):
     """Serve static files"""
-    file_path = STATIC_DIR / filename
-    if not file_path.exists():
-        abort(404)
-    return send_file(str(file_path))
+    return send_from_directory(str(STATIC_DIR), filename)
 
 @app.route("/prepare", methods=["OPTIONS"])
 @app.route("/analyze", methods=["OPTIONS"])

@@ -1,20 +1,19 @@
-version: '3.8'
-
 services:
   postgres:
     image: postgres:16-alpine
-    container_name: quillapp-postgres
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
     environment:
-      POSTGRES_USER: quillapp
-      POSTGRES_PASSWORD: quillapp_dev_password
-      POSTGRES_DB: quillapp
+      POSTGRES_USER: ${POSTGRES_USER:-seshat}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in server/.env}
+      POSTGRES_DB: ${POSTGRES_DB:-seshat}
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U quillapp -d quillapp"]
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -22,14 +21,15 @@ services:
   # Optional: pgAdmin for database management UI
   pgadmin:
     image: dpage/pgadmin4:latest
-    container_name: quillapp-pgadmin
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
     environment:
-      PGADMIN_DEFAULT_EMAIL: admin@quillapp.local
-      PGADMIN_DEFAULT_PASSWORD: admin
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL:-admin@example.invalid}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD:?Set PGADMIN_DEFAULT_PASSWORD to use the tools profile}
       PGADMIN_CONFIG_SERVER_MODE: 'False'
     ports:
-      - "5050:80"
+      - "127.0.0.1:5050:80"
     depends_on:
       - postgres
     profiles:

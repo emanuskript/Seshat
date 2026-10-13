@@ -35,6 +35,7 @@ const listeners = new Map()
 
 let reconnectTimer  = null
 let reconnectTarget = null
+let lastJoinMessage = null
 const RECONNECT_DELAY = 3000
 
 // ---- internal ---------------------------------------------------------------
@@ -72,6 +73,7 @@ function rawConnect(url) {
         socket.value    = ws
         isConnected.value = true
         connectionError.value = null
+        if (lastJoinMessage) ws.send(lastJoinMessage)
         resolve()
       }
       ws.onmessage = onRawMessage
@@ -102,6 +104,7 @@ export function useWebSocket() {
       socket.value = null
       isConnected.value = false
     }
+    lastJoinMessage = null
     const WS_BASE = normalizeWsBase(
       (typeof process !== 'undefined' && process.env && process.env.VUE_APP_WS_URL) || ''
     )
@@ -114,8 +117,9 @@ export function useWebSocket() {
 
   /** Send a typed message: { type, payload } → JSON */
   const send = (type, payload) => {
+    if (type === 'join') lastJoinMessage = JSON.stringify({ type, payload })
     if (socket.value && isConnected.value) {
-      socket.value.send(JSON.stringify({ type, payload }))
+      socket.value.send(type === 'join' ? lastJoinMessage : JSON.stringify({ type, payload }))
     }
   }
 
@@ -140,6 +144,7 @@ export function useWebSocket() {
     socket.value = null
     isConnected.value = false
     listeners.clear()
+    lastJoinMessage = null
   }
 
   return { socket, isConnected, connectionError, connect, send, on, disconnect }

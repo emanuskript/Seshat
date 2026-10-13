@@ -1,5 +1,6 @@
 import { prisma } from '../lib/prisma.js'
-import { NotFoundError, PayloadTooLargeError } from '../utils/errors.js'
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
+import { NotFoundError, PayloadTooLargeError, UnauthorizedError } from '../utils/errors.js'
 import { config } from '../config/env.js'
 import { logger } from '../utils/logger.js'
 
@@ -33,25 +34,56 @@ export function normalizeSessionAnnotations(annotations = {}) {
   return normalized
 }
 
+export function hashAccessToken(token) {
+  return createHash('sha256').update(token).digest('hex')
+}
+
+function annotationsSize(annotations) {
+  return Buffer.byteLength(JSON.stringify(annotations), 'utf8')
+}
+
 export const sessionService = {
   /**
    * Create a new session
    */
   async create({ iiifManifest, documentName, annotations = {}, deviceId }) {
-    logger.info('Creating new session', { iiifManifest, documentName })
     const normalizedAnnotations = normalizeSessionAnnotations(annotations)
+    if (annotationsSize(normalizedAnnotations) > config.session.maxAnnotationsSize) {
+      throw new PayloadTooLargeError(`Annotations exceed maximum size of ${config.session.maxAnnotationsSize / 1024 / 1024}MB`)
+    }
+    const accessToken = randomBytes(32).toString('base64url')
 
     const session = await prisma.session.create({
       data: {
         iiifManifest,
         documentName: documentName || 'Untitled Document',
         annotations: normalizedAnnotations,
-        creatorDeviceId: deviceId || null
+        creatorDeviceId: deviceId || null,
+        accessTokenHash: hashAccessToken(accessToken)
       }
     })
 
     logger.info('Session created', { sessionId: session.id })
-    return session
+    return { ...session, accessToken }
+  },
+
+  async verifyAccess(id, accessToken) {
+    if (typeof accessToken !== 'string' || accessToken.length < 32 || accessToken.length > 128) {
+      throw new UnauthorizedError()
+    }
+    const session = await prisma.session.findUnique({
+      where: { id },
+      select: { accessTokenHash: true }
+    })
+    if (!session) {
+      throw new NotFoundError(`Session not found: ${id}`)
+    }
+    const candidate = Buffer.from(hashAccessToken(accessToken), 'hex')
+    const expected = Buffer.from(session.accessTokenHash, 'hex')
+    if (candidate.length !== expected.length || !timingSafeEqual(candidate, expected)) {
+      throw new UnauthorizedError()
+    }
+    return true
   },
 
   /**
@@ -81,7 +113,7 @@ export const sessionService = {
   async updateAnnotations(id, annotations) {
     const normalizedAnnotations = normalizeSessionAnnotations(annotations)
     // Check payload size
-    const size = JSON.stringify(normalizedAnnotations).length
+    const size = annotationsSize(normalizedAnnotations)
     if (size > config.session.maxAnnotationsSize) {
       throw new PayloadTooLargeError(`Annotations exceed maximum size of ${config.session.maxAnnotationsSize / 1024 / 1024}MB`)
     }

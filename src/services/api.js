@@ -8,6 +8,37 @@ const RAW_BASE =
 // Normalize: trim trailing slashes, and if someone sets ".../api" avoid "/api/api/..."
 const API_URL = RAW_BASE.replace(/\/+$/, '').replace(/\/api$/, '')
 
+const tokenKey = (sessionId) => `seshat_session_token_${sessionId}`
+
+export function storeSessionAccessToken(sessionId, token) {
+  if (typeof localStorage !== 'undefined' && sessionId && token) {
+    localStorage.setItem(tokenKey(sessionId), token)
+  }
+}
+
+export function getSessionAccessToken(sessionId) {
+  if (!sessionId) return ''
+  if (typeof window !== 'undefined') {
+    const routeMatch = window.location.pathname.match(/\/session\/([0-9a-f-]+)$/i)
+    const fragmentToken = new URLSearchParams(window.location.hash.replace(/^#/, '')).get('access_token')
+    if (routeMatch?.[1] === sessionId && fragmentToken) {
+      storeSessionAccessToken(sessionId, fragmentToken)
+      const fragment = new URLSearchParams(window.location.hash.replace(/^#/, ''))
+      fragment.delete('access_token')
+      const suffix = fragment.toString() ? `#${fragment}` : ''
+      window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}${suffix}`)
+      return fragmentToken
+    }
+  }
+  return typeof localStorage !== 'undefined'
+    ? localStorage.getItem(tokenKey(sessionId)) || ''
+    : ''
+}
+
+function sessionIdFromEndpoint(endpoint) {
+  return endpoint.match(/^\/api\/sessions\/([0-9a-f-]+)(?:\/|$)/i)?.[1] || ''
+}
+
 class ApiError extends Error {
   constructor(message, status, code) {
     super(message)
@@ -19,6 +50,11 @@ class ApiError extends Error {
 async function request(endpoint, options = {}) {
   const url = `${API_URL}${endpoint}`
   const config = { ...options }
+  const sessionId = sessionIdFromEndpoint(endpoint)
+  const accessToken = getSessionAccessToken(sessionId)
+  if (sessionId && accessToken) {
+    config.headers = { ...(config.headers || {}), Authorization: `Bearer ${accessToken}` }
+  }
 
   // Only set JSON content-type when sending JSON
   if (config.body !== undefined) {
@@ -70,6 +106,15 @@ export const sessionsApi = {
 }
 
 export const versionsApi = {
+  list: (sessionId) =>
+    request(`/api/sessions/${sessionId}/versions`),
+
+  get: (sessionId, versionId) =>
+    request(`/api/sessions/${sessionId}/versions/${versionId}`),
+
+  checkUnsaved: (sessionId) =>
+    request(`/api/sessions/${sessionId}/versions/check-unsaved`),
+
   createVersion: (sessionId, data) =>
     request(`/api/sessions/${sessionId}/versions`, {
       method: 'POST',

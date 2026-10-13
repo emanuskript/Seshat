@@ -3,9 +3,12 @@ import { versionService } from '../services/VersionService.js'
 import { presenceService } from '../services/PresenceService.js'
 import { versionCreateLimiter } from '../middleware/rateLimiter.js'
 import { sanitizeBody } from '../middleware/sanitize.js'
+import { requireSessionAccess } from '../middleware/sessionAuth.js'
 import { validateVersionCreate, validateUUID } from '../utils/validators.js'
 
 const router = Router({ mergeParams: true })
+
+router.use(requireSessionAccess('sessionId'))
 
 /**
  * POST /api/sessions/:sessionId/versions

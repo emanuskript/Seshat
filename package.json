@@ -2,6 +2,10 @@
   "name": "quill_1.0",
   "version": "0.1.0",
   "private": true,
+  "engines": {
+    "node": "^20.0.0 || ^22.0.0",
+    "npm": ">=9"
+  },
   "scripts": {
     "serve": "vue-cli-service serve",
     "build": "vue-cli-service build",
@@ -14,7 +18,6 @@
   "dependencies": {
     "@fortawesome/fontawesome-free": "^6.7.1",
     "@vueuse/core": "^14.1.0",
-    "axios": "^1.7.7",
     "bootstrap": "^5.3.3",
     "chart.js": "^4.5.1",
     "class-variance-authority": "^0.7.1",
@@ -22,7 +25,7 @@
     "core-js": "^3.8.3",
     "dom-to-image": "^2.6.0",
     "html2canvas": "^1.4.1",
-    "jspdf": "^2.5.2",
+    "jspdf": "^4.2.1",
     "lucide-vue-next": "^0.562.0",
     "openseadragon": "^5.0.1",
     "openseadragon-filtering": "^1.0.0",

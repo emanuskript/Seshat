@@ -2,6 +2,7 @@ import { Router } from 'express'
 import { sessionService } from '../services/SessionService.js'
 import { sessionCreateLimiter, sessionJoinLimiter } from '../middleware/rateLimiter.js'
 import { sanitizeBody } from '../middleware/sanitize.js'
+import { requireSessionAccess } from '../middleware/sessionAuth.js'
 import { validateSessionCreate, validateUUID } from '../utils/validators.js'
 
 const router = Router()
@@ -20,6 +21,7 @@ router.post('/', sessionCreateLimiter, sanitizeBody, async (req, res, next) => {
       iiifManifest: session.iiifManifest,
       documentName: session.documentName,
       annotations: session.annotations,
+      accessToken: session.accessToken,
       createdAt: session.createdAt
     })
   } catch (err) {
@@ -31,7 +33,7 @@ router.post('/', sessionCreateLimiter, sanitizeBody, async (req, res, next) => {
  * GET /api/sessions/:id
  * Get session by ID
  */
-router.get('/:id', sessionJoinLimiter, async (req, res, next) => {
+router.get('/:id', sessionJoinLimiter, requireSessionAccess('id'), async (req, res, next) => {
   try {
     validateUUID(req.params.id, 'sessionId')
     const session = await sessionService.getById(req.params.id)
@@ -53,7 +55,7 @@ router.get('/:id', sessionJoinLimiter, async (req, res, next) => {
  * POST /api/sessions/:id/join
  * Join an existing session (returns session data, records participant)
  */
-router.post('/:id/join', sessionJoinLimiter, sanitizeBody, async (req, res, next) => {
+router.post('/:id/join', sessionJoinLimiter, requireSessionAccess('id'), sanitizeBody, async (req, res, next) => {
   try {
     validateUUID(req.params.id, 'sessionId')
     const session = await sessionService.getById(req.params.id)
@@ -75,7 +77,7 @@ router.post('/:id/join', sessionJoinLimiter, sanitizeBody, async (req, res, next
  * PUT /api/sessions/:id/annotations
  * Update session annotations
  */
-router.put('/:id/annotations', sanitizeBody, async (req, res, next) => {
+router.put('/:id/annotations', requireSessionAccess('id'), sanitizeBody, async (req, res, next) => {
   try {
     validateUUID(req.params.id, 'sessionId')
     const session = await sessionService.updateAnnotations(req.params.id, req.body.annotations || {})
@@ -91,25 +93,10 @@ router.put('/:id/annotations', sanitizeBody, async (req, res, next) => {
 })
 
 /**
- * GET /api/sessions/device/:deviceId
- * Get all sessions for a device (user's projects)
- */
-router.get('/device/:deviceId', async (req, res, next) => {
-  try {
-    validateUUID(req.params.deviceId, 'deviceId')
-    const sessions = await sessionService.getByDeviceId(req.params.deviceId)
-
-    res.json({ sessions })
-  } catch (err) {
-    next(err)
-  }
-})
-
-/**
  * DELETE /api/sessions/:id
  * Delete a session
  */
-router.delete('/:id', async (req, res, next) => {
+router.delete('/:id', requireSessionAccess('id'), async (req, res, next) => {
   try {
     validateUUID(req.params.id, 'sessionId')
     await sessionService.delete(req.params.id)
