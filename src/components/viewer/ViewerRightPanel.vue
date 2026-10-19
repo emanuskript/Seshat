@@ -3,6 +3,10 @@ import { ref, computed, nextTick, watch } from 'vue'
 import Icon from '@/components/ui/icon/Icon.vue'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { Button } from '@/components/ui/button'
+import {
+  normalizeMeasurementLabel,
+  uniqueMeasurementLabels,
+} from '@/utils/measurementStatistics.mjs'
 
 const props = defineProps({
   annotations: { type: Array, default: () => [] },
@@ -10,7 +14,9 @@ const props = defineProps({
   totalPages: { type: Number, default: 1 },
   zoomLevel: { type: Number, default: 1 },
   showInCm: { type: Boolean, default: false },
-  selectedAnnotation: { type: Object, default: null }
+  selectedAnnotation: { type: Object, default: null },
+  angleLabels: { type: Array, default: () => [] },
+  distanceLabels: { type: Array, default: () => [] }
 })
 
 const emit = defineEmits([
@@ -20,7 +26,9 @@ const emit = defineEmits([
   'generate-page-summary',
   'generate-bands-page',
   'generate-bands-doc',
-  'generate-angles'
+  'generate-angles',
+  'generate-distances',
+  'reclassify-annotation'
 ])
 
 const activeTab = ref('annotations')
@@ -47,6 +55,14 @@ const selectedDisplayName = computed(() => {
   return annotation.data?.name || annotation.label || typeLabel(annotation.type)
 })
 const selectedPropertyRows = computed(() => buildPropertyRows(props.selectedAnnotation))
+const selectedClassification = computed(() => normalizeMeasurementLabel(selectedData.value?.label))
+const classificationOptions = computed(() => {
+  const type = props.selectedAnnotation?.type
+  const configured = type === 'angle'
+    ? props.angleLabels
+    : (type === 'distance' ? props.distanceLabels : [])
+  return uniqueMeasurementLabels([selectedClassification.value, ...configured])
+})
 
 function latestAnnotationKey(annotations = []) {
   const latest = annotations[annotations.length - 1]
@@ -106,6 +122,10 @@ function canRename(annotation) {
 
 function handleAnnotationNameChange(annotation, event) {
   emit('rename-annotation', annotation, event.target.value)
+}
+
+function handleClassificationChange(annotation, event) {
+  emit('reclassify-annotation', annotation, event.target.value)
 }
 
 function typeLabel(type) {
@@ -310,6 +330,22 @@ function buildPropertyRows(annotationItem) {
             />
           </div>
 
+          <div v-if="selectedAnnotation.type === 'angle' || selectedAnnotation.type === 'distance'" class="property-section">
+            <label class="property-label" for="selected-measurement-class">Statistics class</label>
+            <input
+              id="selected-measurement-class"
+              class="trace-name-input property-name-input"
+              list="measurement-class-options"
+              :value="selectedClassification"
+              @blur="handleClassificationChange(selectedAnnotation, $event)"
+              @keydown.enter="$event.target.blur()"
+            />
+            <datalist id="measurement-class-options">
+              <option v-for="label in classificationOptions" :key="label" :value="label" />
+            </datalist>
+            <p class="property-help">Statistics group by this class; the display name is only a personal caption.</p>
+          </div>
+
           <div v-if="selectedAnnotation.type === 'comment'" class="property-section">
             <div class="property-label">Comment text</div>
             <div class="comment-property-text">{{ selectedData.text || '—' }}</div>
@@ -393,6 +429,15 @@ function buildPropertyRows(annotationItem) {
             <Icon name="triangle" :size="14" class="mr-2" />
             Angle Measurements
           </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            class="w-full justify-start"
+            @click="emit('generate-distances')"
+          >
+            <Icon name="ruler-dimension-line" :size="14" class="mr-2" />
+            Distance Measurements
+          </Button>
         </div>
       </div>
     </div>
@@ -423,6 +468,13 @@ function buildPropertyRows(annotationItem) {
   border-color: hsl(var(--primary));
   background: hsl(var(--background));
   box-shadow: 0 0 0 2px hsl(var(--primary) / 0.14);
+}
+
+.property-help {
+  margin-top: 0.35rem;
+  color: hsl(var(--muted-foreground));
+  font-size: 0.75rem;
+  line-height: 1.25;
 }
 
 .properties-panel {

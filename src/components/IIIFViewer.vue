@@ -70,6 +70,12 @@
         {{ toolMessage }}
       </div>
 
+      <label v-if="measureModeActive" class="angle-snap-control">
+        <input v-model="angleSnapEnabled" type="checkbox" />
+        <span>Snap to axes</span>
+        <small>Hold Shift for temporary snap</small>
+      </label>
+
       <!-- Hidden file input for adding more pages -->
       <input ref="addImagesInput" type="file" accept="image/*,application/pdf"
              multiple style="display:none" @change="handleAddImages" />
@@ -754,13 +760,17 @@
         :zoom-level="zoomLevel"
         :show-in-cm="showMeasurementsInCm"
         :selected-annotation="selectedAnnotationItem"
+        :angle-labels="angleLabels"
+        :distance-labels="distanceLabels"
         @select-annotation="handleSelectAnnotation"
         @delete-annotation="handleDeleteAnnotation"
         @rename-annotation="renameAnnotation"
+        @reclassify-annotation="reclassifyAnnotation"
         @generate-page-summary="calculateWholePageStatistics"
         @generate-bands-page="calculateCurrentPage"
         @generate-bands-doc="calculateEntireDocument"
         @generate-angles="openAnglesFilterFromStats"
+        @generate-distances="openDistancesFilterFromStats"
       />
     </aside>
 
@@ -821,11 +831,11 @@
           </div>
         </div>
         <div class="row">
-          <label>Label:</label>
+          <label>Class:</label>
           <div class="label-grid">
-            <button class="grid-btn" :class="{active: angleFilterLabel==='__ALL__'}" @click="angleFilterLabel='__ALL__'">All labels</button>
+            <button class="grid-btn" :class="{active: angleFilterLabel==='__ALL__'}" @click="angleFilterLabel='__ALL__'">All classes</button>
             <button
-              v-for="label in angleLabels"
+              v-for="label in angleStatisticsLabels"
               :key="'f-'+label"
               class="grid-btn"
               :class="{active: angleFilterLabel===label}"
@@ -839,6 +849,40 @@
         <div class="popup-actions">
           <button class="grid-btn" @click="runAngleStatistics">Generate</button>
           <button class="grid-btn" @click="showAngleFilterPopup=false">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Distance Statistics Filter Popup -->
+    <div v-if="showDistanceFilterPopup" class="length-popup" @click.self="showDistanceFilterPopup = false">
+      <div class="length-popup-content">
+        <h3>Distance Measurements</h3>
+        <div class="row">
+          <label>Scope:</label>
+          <div class="label-grid">
+            <button class="grid-btn" :class="{active: distanceScope==='page'}" @click="distanceScope='page'">Current Page</button>
+            <button class="grid-btn" :class="{active: distanceScope==='doc'}" @click="distanceScope='doc'">Entire Document</button>
+          </div>
+        </div>
+        <div class="row">
+          <label>Class:</label>
+          <div class="label-grid">
+            <button class="grid-btn" :class="{active: distanceFilterLabel==='__ALL__'}" @click="distanceFilterLabel='__ALL__'">All classes</button>
+            <button
+              v-for="label in distanceStatisticsLabels"
+              :key="'df-'+label"
+              class="grid-btn"
+              :class="{active: distanceFilterLabel===label}"
+              @click="distanceFilterLabel=label"
+            >
+              {{ label }}
+            </button>
+          </div>
+        </div>
+
+        <div class="popup-actions">
+          <button class="grid-btn" @click="runDistanceStatistics">Generate</button>
+          <button class="grid-btn" @click="showDistanceFilterPopup=false">Cancel</button>
         </div>
       </div>
     </div>
@@ -870,6 +914,7 @@
           <button class="grid-btn" @click="calculateCurrentPage">Bands: Current Page</button>
           <button class="grid-btn" @click="calculateEntireDocument">Bands: Entire Document</button>
           <button class="grid-btn" @click="openAnglesFilterFromStats">Angle Measurements…</button>
+          <button class="grid-btn" @click="openDistancesFilterFromStats">Distance Measurements…</button>
           <button class="grid-btn" @click="showStatsPanel=false">Close</button>
         </div>
       </div>
@@ -894,7 +939,7 @@
     <!-- Angle Statistics Result Popup -->
     <div v-if="showAngleStatistics" class="statistics-popup" @click.self="showAngleStatistics = false">
       <div class="statistics-popup-content">
-        <h3>Angle Statistics ({{ angleStatistics.count }} angles)</h3>
+        <h3>Angle Statistics ({{ angleStatistics.count }} {{ angleStatistics.count === 1 ? 'angle' : 'angles' }})</h3>
         <p v-if="angleStatisticsContext" class="angle-stats-context">{{ angleStatisticsContext }}</p>
         <table>
           <thead>
@@ -917,6 +962,40 @@
           </tbody>
         </table>
         <button class="grid-btn" @click="showAngleStatistics = false">Close</button>
+      </div>
+    </div>
+
+    <!-- Distance Statistics Result Popup -->
+    <div v-if="showDistanceStatistics" class="statistics-popup" @click.self="showDistanceStatistics = false">
+      <div class="statistics-popup-content">
+        <h3>Distance Statistics ({{ distanceStatistics.count }} {{ distanceStatistics.count === 1 ? 'distance' : 'distances' }})</h3>
+        <p v-if="distanceStatisticsContext" class="angle-stats-context">{{ distanceStatisticsContext }}</p>
+        <p v-if="distanceStatisticsApproximateCount" class="measurement-statistics-warning">
+          {{ distanceStatisticsApproximateCount }}
+          {{ distanceStatisticsApproximateCount === 1 ? 'measurement uses' : 'measurements use' }}
+          the approximate 96-DPI conversion.
+        </p>
+        <table>
+          <thead>
+            <tr>
+              <th>Mean</th>
+              <th>Median</th>
+              <th>Std Dev</th>
+              <th>Min</th>
+              <th>Max</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>{{ formatStat(distanceStatistics.mean) }} {{ distanceStatisticsUnit }}</td>
+              <td>{{ formatStat(distanceStatistics.median) }} {{ distanceStatisticsUnit }}</td>
+              <td>{{ formatStat(distanceStatistics.stdDev) }} {{ distanceStatisticsUnit }}</td>
+              <td>{{ formatStat(distanceStatistics.min) }} {{ distanceStatisticsUnit }}</td>
+              <td>{{ formatStat(distanceStatistics.max) }} {{ distanceStatisticsUnit }}</td>
+            </tr>
+          </tbody>
+        </table>
+        <button class="grid-btn" @click="showDistanceStatistics = false">Close</button>
       </div>
     </div>
 
@@ -1357,6 +1436,17 @@ import {
   pageHasExportableAnnotations,
   selectPdfExportPages,
 } from "@/services/pdfExportUtils.mjs";
+import {
+  UNLABELED_MEASUREMENT,
+  axisGuideCandidate,
+  calculateAngleDegrees,
+  measurementLabelsEqual,
+  normalizeMeasurementLabel,
+  pointDistance,
+  scaledPointDistance,
+  summarizeMeasurements,
+  uniqueMeasurementLabels,
+} from "@/utils/measurementStatistics.mjs";
 import { useSession } from "@/composables/useSession";
 import { usePresence } from "@/composables/usePresence";
 import { useFollow } from "@/composables/useFollow";
@@ -1679,6 +1769,7 @@ export default {
       // Angle guides
       angleGuideMousePos: null,  // current mouse position for construction guides
       angleSnapGuide: null,      // { type: 'horizontal'|'vertical', y: number } for snap lines
+      angleSnapEnabled: false,   // opt-in; Shift temporarily enables snapping
 
       // Angle labels
       showAngleLabelPopup: false,
@@ -1696,6 +1787,16 @@ export default {
       angleStatistics: { count: 0, mean: 0, median: 0, stdDev: 0, min: 0, max: 0, mode: "No mode", angles: [] },
       angleStatisticsContext: "",
       showAngleStatistics: false,
+
+      // Distance stats filter
+      showDistanceFilterPopup: false,
+      distanceScope: "page",        // 'page' | 'doc'
+      distanceFilterLabel: "__ALL__",
+      distanceStatistics: { count: 0, mean: 0, median: 0, stdDev: 0, min: 0, max: 0, mode: "No mode", values: [] },
+      distanceStatisticsContext: "",
+      distanceStatisticsUnit: "px",
+      distanceStatisticsApproximateCount: 0,
+      showDistanceStatistics: false,
 
       // Bands
       showHorizontalPopup: false,
@@ -1761,7 +1862,6 @@ export default {
       // Cropped popup state
       croppedImage: null,
       croppedStrokes: [],
-      croppedMeasures: [],
       croppedHighlights: [],
       croppedUnderlines: [],
       croppedMeasurePoints: [],
@@ -2129,10 +2229,12 @@ export default {
       return this.showAngleLabelPopup || 
              this.showDistanceLabelPopup ||
              this.showAngleFilterPopup || 
+             this.showDistanceFilterPopup ||
              this.showTracePopup || 
              this.showHorizontalPopup || 
              this.showVerticalPopup || 
              this.showAngleStatistics || 
+             this.showDistanceStatistics ||
              this.showStatistics || 
              this.showClearConfirmation || 
              !!this.croppedImage ||
@@ -2224,6 +2326,28 @@ export default {
       }
 
       return distances;
+    },
+    angleStatisticsLabels() {
+      const pages = this.angleScope === 'page'
+        ? [this.currentPage]
+        : Array.from({ length: Math.max(this.totalPages, this.annotationsByPage.length) }, (_, index) => index);
+      const labels = pages.flatMap(pageIndex =>
+        (this.annotationsByPage[pageIndex] || [])
+          .filter(annotation => annotation?.type === 'measure')
+          .map(annotation => annotation.label)
+      );
+      return uniqueMeasurementLabels(labels);
+    },
+    distanceStatisticsLabels() {
+      const pages = this.distanceScope === 'page'
+        ? [this.currentPage]
+        : Array.from({ length: Math.max(this.totalPages, this.annotationsByPage.length) }, (_, index) => index);
+      const labels = pages.flatMap(pageIndex =>
+        (this.annotationsByPage[pageIndex] || [])
+          .filter(annotation => annotation?.type === 'distance')
+          .map(annotation => annotation.label)
+      );
+      return uniqueMeasurementLabels(labels);
     },
     currentPageLengthMeasurements() {
       const measurements = [];
@@ -2464,7 +2588,11 @@ export default {
       // Refresh comment overlays for the new page
       this.expandedCommentId = null;
       this._removeComposerOverlay();
-      this.$nextTick(() => this.renderCommentOverlays());
+      this.$nextTick(() => {
+        this.renderCommentOverlays();
+        this.refreshVisibleAngleStatistics();
+        this.refreshVisibleDistanceStatistics();
+      });
 
       // Broadcast page change for follow mode (immediate, not throttled)
       if (this.sessionConnected && !this.isApplyingFollowSync && this.osdViewer) {
@@ -2540,6 +2668,7 @@ export default {
     },
     showMeasurementsInCm() {
       this.queueSessionSettingsSync();
+      this.refreshVisibleDistanceStatistics();
     },
     // Watch for incoming annotation changes from session
     sessionAnnotations: {
@@ -2855,16 +2984,7 @@ export default {
       }, 400);
     },
     mergeUniqueLabels(labels = []) {
-      const seen = new Set();
-      return labels
-        .map(label => String(label || '').trim())
-        .filter(label => label && label !== 'Unlabeled')
-        .filter(label => {
-          const key = label.toLocaleLowerCase();
-          if (seen.has(key)) return false;
-          seen.add(key);
-          return true;
-        });
+      return uniqueMeasurementLabels(labels, { includeUnlabeled: false });
     },
     collectAngleLabelsFromAnnotations(annotations = null) {
       const labels = [];
@@ -2904,16 +3024,18 @@ export default {
       return this.mergeUniqueLabels(labels);
     },
     addAngleLabelIfNeeded(label) {
-      const normalized = String(label || '').trim();
-      if (!normalized || normalized === 'Unlabeled') return;
-      if (!this.angleLabels.some(existing => String(existing || '').toLocaleLowerCase() === normalized.toLocaleLowerCase())) {
+      if (!String(label || '').trim()) return;
+      const normalized = normalizeMeasurementLabel(label);
+      if (normalized === UNLABELED_MEASUREMENT) return;
+      if (!this.angleLabels.some(existing => measurementLabelsEqual(existing, normalized))) {
         this.angleLabels.push(normalized);
       }
     },
     addDistanceLabelIfNeeded(label) {
-      const normalized = String(label || '').trim();
-      if (!normalized || normalized === 'Unlabeled') return;
-      if (!this.distanceLabels.some(existing => String(existing || '').toLocaleLowerCase() === normalized.toLocaleLowerCase())) {
+      if (!String(label || '').trim()) return;
+      const normalized = normalizeMeasurementLabel(label);
+      if (normalized === UNLABELED_MEASUREMENT) return;
+      if (!this.distanceLabels.some(existing => measurementLabelsEqual(existing, normalized))) {
         this.distanceLabels.push(normalized);
       }
     },
@@ -3289,6 +3411,42 @@ export default {
       }
     },
 
+    reclassifyAnnotation(annotationItem, rawLabel) {
+      const target = annotationItem?.data;
+      const type = this.normalizeAnnotationDisplayType(annotationItem?.type);
+      if (!target || (type !== 'angle' && type !== 'distance')) return;
+
+      const label = normalizeMeasurementLabel(rawLabel);
+      const pageIndex = Number.isInteger(target.pageIndex) ? target.pageIndex : this.currentPage;
+      const rawType = type === 'angle' ? 'measure' : 'distance';
+      const pageAnnotations = this.annotationsByPage[pageIndex] || [];
+      const index = target.id
+        ? pageAnnotations.findIndex(annotation => annotation?.type === rawType && annotation.id === target.id)
+        : pageAnnotations.indexOf(target);
+      if (index === -1) return;
+
+      const updatedAnnotation = { ...pageAnnotations[index], label };
+      pageAnnotations[index] = updatedAnnotation;
+      if (type === 'angle') this.addAngleLabelIfNeeded(label);
+      if (type === 'distance') this.addDistanceLabelIfNeeded(label);
+
+      this.selectedAnnotationItem = {
+        ...annotationItem,
+        label: this.getAnnotationBankLabel(annotationItem.type, updatedAnnotation, annotationItem.index),
+        data: updatedAnnotation,
+      };
+
+      if (this.sessionConnected && updatedAnnotation.id) {
+        this.syncUpdateAnnotation(type === 'angle' ? 'measures' : 'distances', updatedAnnotation.id, { label }, pageIndex);
+      } else if (this.activeSessionId) {
+        this.queueSessionSnapshotSync();
+      }
+
+      this.refreshVisibleAngleStatistics();
+      this.refreshVisibleDistanceStatistics();
+      this.showToolMessage(`${type === 'angle' ? 'Angle' : 'Distance'} class updated to “${label}”.`);
+    },
+
     normalizeAnnotationDisplayType(type) {
       if (type === 'measure') return 'angle';
       if (type === 'length-h' || type === 'length-v') return 'length';
@@ -3306,14 +3464,16 @@ export default {
         return text.substring(0, 25) + (text.length > 25 ? '...' : '') || `Comment ${index + 1}`;
       }
       if (normalizedType === 'angle') {
-        if (annotation?.name) return annotation.name;
-        return `${annotation?.angle}°${annotation?.label ? ' - ' + annotation.label : ''}`;
+        const classification = normalizeMeasurementLabel(annotation?.label);
+        if (annotation?.name) return `${annotation.name} • ${annotation?.angle}° • ${classification}`;
+        return `${annotation?.angle}° - ${classification}`;
       }
       if (normalizedType === 'distance') {
-        if (annotation?.name) return annotation.name;
         const pageIndex = Number.isInteger(annotation?.pageIndex) ? annotation.pageIndex : this.currentPage;
-        const label = annotation?.label ? `${annotation.label} - ` : '';
-        return `${label}${this.formatDistanceAnnotation(annotation, pageIndex)}`;
+        const classification = normalizeMeasurementLabel(annotation?.label);
+        const measurement = this.formatDistanceAnnotation(annotation, pageIndex);
+        if (annotation?.name) return `${annotation.name} • ${measurement} • ${classification}`;
+        return `${classification} - ${measurement}`;
       }
       if (normalizedType === 'length') {
         if (annotation?.name) return annotation.name;
@@ -3783,6 +3943,8 @@ export default {
       if (this.selectedAnnotationItem?.data?.id === deletedDistance?.id) {
         this.selectedAnnotationItem = null;
       }
+
+      this.refreshVisibleDistanceStatistics();
 
       if (deletedDistance?.id && this.sessionConnected) {
         this.syncDeleteAnnotation('distances', deletedDistance.id, pageIndex);
@@ -4283,6 +4445,8 @@ export default {
           source: 'iiif',
           physicalWidthCm: canvasWidth * canvasScale.cmPerUnit,
           physicalHeightCm: canvasHeight * canvasScale.cmPerUnit,
+          pixelsPerCmX: 1 / canvasScale.cmPerUnit,
+          pixelsPerCmY: 1 / canvasScale.cmPerUnit,
           ...canvasScale,
         };
       });
@@ -4452,20 +4616,21 @@ export default {
       return points.map(({ x, y }) => `${x},${y}`).join(" ");
     },
     calculateAngle(pt1, pt2, pt3) {
-      const v1 = { x: pt1.x - pt2.x, y: pt1.y - pt2.y };
-      const v2 = { x: pt3.x - pt2.x, y: pt3.y - pt2.y };
-      const dot = v1.x * v2.x + v1.y * v2.y;
-      const mag1 = Math.hypot(v1.x, v1.y);
-      const mag2 = Math.hypot(v2.x, v2.y);
-      if (!mag1 || !mag2) return 0;
-      const angleRad = Math.acos(Math.max(-1, Math.min(1, dot / (mag1 * mag2))));
-      const deg = (angleRad * 180) / Math.PI;
-      return Number.isFinite(deg) ? parseFloat(deg.toFixed(2)) : 0;
+      return calculateAngleDegrees(pt1, pt2, pt3) ?? 0;
     },
     
     calculateLiveAngle(pt1, vertex, mousePt) {
       // Calculate angle in real-time as mouse moves
       return this.calculateAngle(pt1, vertex, mousePt);
+    },
+
+    hasUsableAngleArms(points = []) {
+      if (!Array.isArray(points) || points.length !== 3) return false;
+      const minimumArmLength = 4 * this.svgInverseScale;
+      const firstArm = pointDistance(points[0], points[1]);
+      const secondArm = pointDistance(points[1], points[2]);
+      return Number.isFinite(firstArm) && Number.isFinite(secondArm) &&
+        firstArm >= minimumArmLength && secondArm >= minimumArmLength;
     },
     
     getAngleArcPath(vertex, pt1, pt2, customRadius) {
@@ -4491,54 +4656,26 @@ export default {
       return `M ${startX} ${startY} A ${radius} ${radius} 0 ${largeArcFlag} 1 ${endX} ${endY}`;
     },
     
-    getSnappedPosition(x, y) {
-      // Smart snapping for horizontal/vertical alignment
-      const snapThreshold = 8; // pixels
+    getSnappedPosition(x, y, shouldSnap = false) {
+      // Guides use a screen-space threshold; coordinates only change when
+      // snapping is explicitly enabled or Shift is held.
+      const snapThreshold = 8 * this.svgInverseScale;
       this.angleSnapGuide = null;
       
       if (this.measurePoints.length === 0) {
         return { x, y };
       }
       
-      // When placing the 2nd point (vertex), check alignment with first point
-      if (this.measurePoints.length === 1) {
-        const pt = this.measurePoints[0];
-        
-        // Horizontal alignment (same Y as first point)
-        const verticalDist = Math.abs(y - pt.y);
-        if (verticalDist < snapThreshold) {
-          this.angleSnapGuide = { type: 'horizontal', y: pt.y };
-          return { x, y: pt.y };
-        }
-        
-        // Vertical alignment (same X as first point)
-        const horizontalDist = Math.abs(x - pt.x);
-        if (horizontalDist < snapThreshold) {
-          this.angleSnapGuide = { type: 'vertical', x: pt.x };
-          return { x: pt.x, y };
-        }
-      }
-      
-      // When placing the 3rd point, check alignment with vertex (2nd point)
-      if (this.measurePoints.length === 2) {
-        const vertex = this.measurePoints[1];
-        
-        // Horizontal alignment (same Y as vertex)
-        const verticalDist = Math.abs(y - vertex.y);
-        if (verticalDist < snapThreshold) {
-          this.angleSnapGuide = { type: 'horizontal', y: vertex.y };
-          return { x, y: vertex.y };
-        }
-        
-        // Vertical alignment (same X as vertex)
-        const horizontalDist = Math.abs(x - vertex.x);
-        if (horizontalDist < snapThreshold) {
-          this.angleSnapGuide = { type: 'vertical', x: vertex.x };
-          return { x: vertex.x, y };
-        }
-      }
-      
-      return { x, y };
+      const reference = this.measurePoints.length === 1
+        ? this.measurePoints[0]
+        : (this.measurePoints.length === 2 ? this.measurePoints[1] : null);
+      const candidate = axisGuideCandidate({ x, y }, reference, snapThreshold);
+      if (!candidate) return { x, y };
+
+      this.angleSnapGuide = candidate.type === 'horizontal'
+        ? { type: 'horizontal', y: candidate.y }
+        : { type: 'vertical', x: candidate.x };
+      return shouldSnap ? candidate.position : { x, y };
     },
     getDistanceAxisGuide(start, current) {
       if (!start || !current) return null;
@@ -5030,34 +5167,34 @@ export default {
 
     // Handler for angle label popup confirm
     onAngleLabelConfirm(label) {
-      const normalizedLabel = String(label || '').trim();
-      if (!normalizedLabel) {
+      if (!String(label || '').trim()) {
         this.showToolMessage("Choose or create a label first.");
         return;
       }
+      const normalizedLabel = normalizeMeasurementLabel(label);
       this.addAngleLabelIfNeeded(normalizedLabel);
       this.resetAnnotationToolState();
       this.activeAngleLabel = normalizedLabel;
       this.measureModeActive = true;
-      this.showToolMessage(`Angle measure: label "${normalizedLabel}". Click 3 points (A, vertex, B).`);
+      this.showToolMessage(`Angle measure: class "${normalizedLabel}". Click 3 points (A, vertex, B); hold Shift to snap.`);
     },
     onDistanceLabelConfirm(label) {
-      const normalizedLabel = String(label || '').trim();
-      if (!normalizedLabel) {
+      if (!String(label || '').trim()) {
         this.showToolMessage("Choose or create a label first.");
         return;
       }
+      const normalizedLabel = normalizeMeasurementLabel(label);
       this.addDistanceLabelIfNeeded(normalizedLabel);
       this.resetAnnotationToolState();
       this.activeDistanceLabel = normalizedLabel;
       this.distanceModeActive = true;
-      this.showToolMessage(`Distance measure: label "${normalizedLabel}". Click 2 points.`);
+      this.showToolMessage(`Distance measure: class "${normalizedLabel}". Click 2 points.`);
     },
 
     /* ---------- Angle label popup ---------- */
     confirmNewAngleLabel() {
-      const label = (this.newAngleLabel || "").trim();
-      if (!label) return;
+      if (!String(this.newAngleLabel || '').trim()) return;
+      const label = normalizeMeasurementLabel(this.newAngleLabel);
       this.addAngleLabelIfNeeded(label);
       this.activeAngleLabel = label;
       this.newAngleLabel = "";
@@ -5071,7 +5208,7 @@ export default {
       // Every activation starts from the same exclusive baseline.
       this.resetAnnotationToolState();
       this.measureModeActive = true;
-      this.showToolMessage(`Angle measure: label "${this.activeAngleLabel}". Click 3 points (A, vertex, B).`);
+      this.showToolMessage(`Angle measure: class "${this.activeAngleLabel}". Click 3 points (A, vertex, B); hold Shift to snap.`);
     },
     cancelAngleLabel() {
       this.activeAngleLabel = null;
@@ -5119,7 +5256,20 @@ cancelPenSelection() {
 
     openAnglesFilterFromStats() {
       this.showStatsPanel = false;          // ensure the stats panel closes
+      if (this.angleFilterLabel !== '__ALL__' &&
+          !this.angleStatisticsLabels.some(label => measurementLabelsEqual(label, this.angleFilterLabel))) {
+        this.angleFilterLabel = '__ALL__';
+      }
       this.showAngleFilterPopup = true;     // then open the angles filter
+    },
+
+    openDistancesFilterFromStats() {
+      this.showStatsPanel = false;
+      if (this.distanceFilterLabel !== '__ALL__' &&
+          !this.distanceStatisticsLabels.some(label => measurementLabelsEqual(label, this.distanceFilterLabel))) {
+        this.distanceFilterLabel = '__ALL__';
+      }
+      this.showDistanceFilterPopup = true;
     },
 
     runAngleStatistics() {
@@ -5141,7 +5291,7 @@ cancelPenSelection() {
       }
 
       const scopeText = this.angleScope === "page" ? "Current page" : "Entire document";
-      const labelText = labelFilter ? `Label: ${labelFilter}` : "All labels";
+      const labelText = labelFilter ? `Class: ${normalizeMeasurementLabel(labelFilter)}` : "All classes";
       this.angleStatistics = stats;
       this.angleStatisticsContext = `${scopeText} • ${labelText}`;
       this.showAngleFilterPopup = false;
@@ -5150,6 +5300,79 @@ cancelPenSelection() {
 
     closeAngleStatisticsPopup() {
       this.showAngleStatistics = false;
+    },
+
+    getDistanceMeasurement(annotation, pageIndex, unit = 'px') {
+      const points = annotation?.points || [];
+      if (points.length < 2) return null;
+      if (unit === 'px') {
+        const value = pointDistance(points[0], points[1]);
+        return Number.isFinite(value) ? { value, approximate: false } : null;
+      }
+
+      const scale = this.measurementScalesByPage[pageIndex] || null;
+      const pixelsPerCmX = this.pixelsPerCmForPage(pageIndex, 'x');
+      const pixelsPerCmY = this.pixelsPerCmForPage(pageIndex, 'y');
+      const value = scaledPointDistance(points[0], points[1], pixelsPerCmX, pixelsPerCmY);
+      if (!Number.isFinite(value)) return null;
+      const hasExplicitAxes = Number(scale?.pixelsPerCmX) > 0 && Number(scale?.pixelsPerCmY) > 0;
+      return {
+        value,
+        approximate: !scale || scale.source === 'assumption' || !hasExplicitAxes,
+      };
+    },
+
+    collectDistanceMeasurementsFromAnnotations(annotations = [], labelFilter = null, pageIndex = this.currentPage, unit = 'px') {
+      if (!Array.isArray(annotations)) return [];
+      return annotations
+        .filter(annotation => annotation?.type === 'distance')
+        .filter(annotation => !labelFilter || measurementLabelsEqual(annotation.label, labelFilter))
+        .map(annotation => this.getDistanceMeasurement(annotation, pageIndex, unit))
+        .filter(Boolean);
+    },
+
+    runDistanceStatistics() {
+      const pageCount = Math.max(this.totalPages, this.annotationsByPage.length);
+      const pages = (this.distanceScope === 'page' || pageCount === 0)
+        ? [this.currentPage]
+        : Array.from({ length: pageCount }, (_, index) => index);
+      const labelFilter = this.distanceFilterLabel === '__ALL__' ? null : this.distanceFilterLabel;
+      const unit = this.showMeasurementsInCm ? 'cm' : 'px';
+      const measurements = pages.flatMap(pageIndex =>
+        this.collectDistanceMeasurementsFromAnnotations(
+          this.annotationsByPage[pageIndex] || [],
+          labelFilter,
+          pageIndex,
+          unit
+        )
+      );
+      const stats = summarizeMeasurements(measurements.map(measurement => measurement.value));
+      if (stats.count === 0) {
+        this.showToolMessage('No distances found for the selected scope/class.');
+        this.showDistanceFilterPopup = false;
+        this.showDistanceStatistics = false;
+        this.distanceStatistics = { ...stats, values: [] };
+        return;
+      }
+
+      const scopeText = this.distanceScope === 'page' ? 'Current page' : 'Entire document';
+      const labelText = labelFilter ? `Class: ${normalizeMeasurementLabel(labelFilter)}` : 'All classes';
+      this.distanceStatistics = { ...stats, values: measurements.map(measurement => measurement.value) };
+      this.distanceStatisticsContext = `${scopeText} • ${labelText}`;
+      this.distanceStatisticsUnit = unit;
+      this.distanceStatisticsApproximateCount = measurements.filter(measurement => measurement.approximate).length;
+      this.showDistanceFilterPopup = false;
+      this.showDistanceStatistics = true;
+    },
+
+    refreshVisibleDistanceStatistics() {
+      if (!this.showDistanceStatistics) return;
+      this.runDistanceStatistics();
+      this.showDistanceFilterPopup = false;
+    },
+
+    closeDistanceStatisticsPopup() {
+      this.showDistanceStatistics = false;
     },
 
     /* ---------- Length measurement ---------- */
@@ -5973,6 +6196,8 @@ cancelPenSelection() {
         if (commentChanged) {
           this.$nextTick(() => this.renderCommentOverlays());
         }
+        if (isAngleAnnotation) this.refreshVisibleAngleStatistics();
+        if (isDistanceAnnotation) this.refreshVisibleDistanceStatistics();
       } finally {
         this.finishApplyingSessionSync();
       }
@@ -6401,7 +6626,8 @@ cancelPenSelection() {
       // MEASURE ANGLE
       if (this.measureModeActive) {
         const rawPos = this.getMousePosition(event);
-        const { x, y } = this.getSnappedPosition(rawPos.x, rawPos.y);
+        const snapRequested = this.angleSnapEnabled || !!event.shiftKey;
+        const { x, y } = this.getSnappedPosition(rawPos.x, rawPos.y, snapRequested);
         const nearest = this.findNearestPoint(x, y, 10);
         if (nearest.annotationIndex !== -1) {
           this.editingAnnotationIndex = nearest.annotationIndex;
@@ -6413,6 +6639,12 @@ cancelPenSelection() {
         if (this.measurePoints.length >= 3) return;
         this.measurePoints.push({ x, y });
         if (this.measurePoints.length === 3) {
+          if (!this.hasUsableAngleArms(this.measurePoints)) {
+            this.measurePoints.pop();
+            this.isOperationInProgress = false;
+            this.showToolMessage('Angle arms are too short. Place the endpoint farther from the vertex.');
+            return;
+          }
           this.calculatedAngle = this.calculateAngle(this.measurePoints[0], this.measurePoints[1], this.measurePoints[2]);
           if (!this.annotationsByPage[this.currentPage]) {
             this.annotationsByPage[this.currentPage] = [];
@@ -6532,7 +6764,8 @@ cancelPenSelection() {
       // ANGLE: Update guide mouse position and check for snapping
       if (this.measureModeActive) {
         const { x, y } = this.getMousePosition(event);
-        const snappedPos = this.getSnappedPosition(x, y);
+        const snapRequested = this.angleSnapEnabled || !!event.shiftKey;
+        const snappedPos = this.getSnappedPosition(x, y, snapRequested);
         this.angleGuideMousePos = snappedPos;
       }
       
@@ -6615,9 +6848,23 @@ cancelPenSelection() {
 
       // ANGLE drag end
       if (this.measureModeActive && this.draggingPoint !== -1) {
+        const editedAnnotation = this.editingAnnotationIndex !== -1
+          ? this.annotationsByPage[this.currentPage]?.[this.editingAnnotationIndex]
+          : null;
         this.draggingPoint = -1;
         this.editingAnnotationIndex = -1;
         this.measurePoints = [];
+        this.angleGuideMousePos = null;
+        this.angleSnapGuide = null;
+        if (editedAnnotation?.id && this.sessionConnected) {
+          this.syncUpdateAnnotation('measures', editedAnnotation.id, {
+            points: editedAnnotation.points,
+            angle: editedAnnotation.angle,
+          }, this.currentPage);
+        } else if (editedAnnotation && this.activeSessionId) {
+          this.queueSessionSnapshotSync();
+        }
+        if (editedAnnotation) this.refreshVisibleAngleStatistics();
       }
 
       // CROP finalize
@@ -7721,7 +7968,7 @@ cancelPenSelection() {
             vertex: this.croppedLive.measure.points[1],
             point2: this.croppedLive.measure.points[2],
             points: [...this.croppedLive.measure.points],
-            angle: Math.round(angle),
+            angle,
             label: this.activeAngleLabel || "Unlabeled",
             color: 'blue'
           });
@@ -7766,7 +8013,7 @@ cancelPenSelection() {
           // Recalculate angle
           if (ann.points.length === 3) {
             const angle = this.calculateAngle(ann.points[0], ann.points[1], ann.points[2]);
-            ann.angle = Math.round(angle);
+            ann.angle = angle;
           }
         }
         return;
@@ -8346,37 +8593,7 @@ cancelPenSelection() {
       return measurements.map((m) => (isVertical ? m.width : m.height));
     },
     summarizeNumbers(values = []) {
-      const nums = (values || []).map(Number).filter((v) => Number.isFinite(v));
-      if (!nums.length) {
-        return { count: 0, mean: 0, median: 0, stdDev: 0, min: 0, max: 0, mode: "No mode" };
-      }
-
-      const sorted = [...nums].sort((a, b) => a - b);
-      const count = sorted.length;
-      const sum = sorted.reduce((a, b) => a + b, 0);
-      const mean = sum / count;
-      const median = count % 2 === 0
-        ? (sorted[count / 2 - 1] + sorted[count / 2]) / 2
-        : sorted[Math.floor(count / 2)];
-      const variance = sorted.reduce((acc, v) => acc + Math.pow(v - mean, 2), 0) / count;
-
-      const freq = {};
-      sorted.forEach((v) => { freq[v] = (freq[v] || 0) + 1; });
-      const maxFreq = Math.max(...Object.values(freq));
-      const mode = maxFreq > 1
-        ? Math.min(...Object.keys(freq).filter((k) => freq[k] === maxFreq).map(Number))
-        : "No mode";
-
-      const round = (n) => (Number.isFinite(n) ? Number(n.toFixed(2)) : 0);
-      return {
-        count,
-        mean: round(mean),
-        median: round(median),
-        stdDev: round(Math.sqrt(variance)),
-        min: round(sorted[0]),
-        max: round(sorted[sorted.length - 1]),
-        mode: typeof mode === "number" ? round(mode) : mode,
-      };
+      return summarizeMeasurements(values);
     },
     formatStat(value) {
       const n = Number(value);
@@ -8396,7 +8613,7 @@ cancelPenSelection() {
       const values = [];
       annotations.forEach((a) => {
         if (!a || a.type !== "measure") return;
-        if (labelFilter && a.label !== labelFilter) return;
+        if (labelFilter && !measurementLabelsEqual(a.label, labelFilter)) return;
         const val = this.getAngleValueFromAnnotation(a);
         if (Number.isFinite(val)) values.push(val);
       });
@@ -8410,13 +8627,7 @@ cancelPenSelection() {
       };
     },
     distanceBetweenPoints(a, b) {
-      if (!a || !b) return 0;
-      const x1 = Number(a.x);
-      const y1 = Number(a.y);
-      const x2 = Number(b.x);
-      const y2 = Number(b.y);
-      if (![x1, y1, x2, y2].every(Number.isFinite)) return 0;
-      return Math.hypot(x2 - x1, y2 - y1);
+      return pointDistance(a, b) ?? 0;
     },
     polylineLength(points = []) {
       if (!Array.isArray(points) || points.length < 2) return 0;
@@ -9474,6 +9685,40 @@ body.cropped-popup-active *::-moz-selection {
 }
 .statistics-popup-content h4 { margin-top: 12px; margin-bottom: 8px; }
 .angle-stats-context { margin: 4px 0 12px; color: #4b5563; font-size: 13px; }
+
+.measurement-statistics-warning {
+  margin: 0 0 12px;
+  padding: 8px 10px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 6px;
+  background: hsl(var(--muted));
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+}
+
+.angle-snap-control {
+  position: absolute;
+  top: 4rem;
+  left: 50%;
+  z-index: 950;
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  transform: translateX(-50%);
+  padding: 0.45rem 0.7rem;
+  border: 1px solid hsl(var(--border));
+  border-radius: 0.5rem;
+  background: hsl(var(--card) / 0.96);
+  box-shadow: 0 4px 12px rgb(0 0 0 / 0.14);
+  color: hsl(var(--foreground));
+  font-size: 0.8rem;
+  user-select: none;
+}
+
+.angle-snap-control small {
+  color: hsl(var(--muted-foreground));
+  font-size: 0.7rem;
+}
 
 /* Stage is a fixed viewport for the page; UI overlays sit on top via z-index */
 .pdf-viewer.stage {
