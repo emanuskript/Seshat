@@ -317,20 +317,25 @@ setup_node_backend() {
   npm ci --unsafe-perm
   npm audit --omit=dev --audit-level=high
 
+  local database_url
+  database_url="postgresql://${DB_USER}:${DB_PASS}@localhost:5432/${DB_NAME}?schema=public"
+
   tee "${NODE_ENV_FILE}" >/dev/null <<EOF
 PORT=${NODE_PORT}
 HOST=127.0.0.1
 NODE_ENV=production
 CORS_ORIGIN=${PUBLIC_ORIGIN}
-DATABASE_URL=postgresql://${DB_USER}:${DB_PASS}@localhost:5432/${DB_NAME}?schema=public
+DATABASE_URL=${database_url}
 SESSION_RETENTION_DAYS=${SESSION_RETENTION_DAYS:-90}
 EOF
   chown root:"${SERVICE_GROUP}" "${NODE_ENV_FILE}"
   chmod 0640 "${NODE_ENV_FILE}"
 
-  # Generate Prisma client + apply migrations
-  npx prisma generate
-  npx prisma migrate deploy
+  # systemd reads NODE_ENV_FILE when the service starts, but the Prisma CLI
+  # runs during deployment and does not read arbitrary EnvironmentFile files.
+  # Pass the same URL explicitly so schema validation and migrations can run.
+  DATABASE_URL="${database_url}" npx prisma generate
+  DATABASE_URL="${database_url}" npx prisma migrate deploy
   npm prune --omit=dev
 
   tee "/etc/systemd/system/${APP_NAME}-node.service" >/dev/null <<EOF
