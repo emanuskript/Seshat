@@ -45,6 +45,13 @@ if [[ ! "${PUBLIC_ORIGIN}" =~ ^https?://[^/]+$ ]]; then
 fi
 WS_ORIGIN="${PUBLIC_ORIGIN/https:/wss:}"
 WS_ORIGIN="${WS_ORIGIN/http:/ws:}"
+REQUIRE_EXTERNAL_REACHABILITY="${REQUIRE_EXTERNAL_REACHABILITY:-0}"
+
+if [[ "${REQUIRE_EXTERNAL_REACHABILITY}" != "0" \
+  && "${REQUIRE_EXTERNAL_REACHABILITY}" != "1" ]]; then
+  echo "ERROR: REQUIRE_EXTERNAL_REACHABILITY must be 0 or 1." >&2
+  exit 1
+fi
 
 NODE_PORT="${NODE_PORT:-3001}"
 PY_PORT="${PY_PORT:-5001}"
@@ -650,6 +657,7 @@ start_services() {
 verify_deploy() {
   log "Verifying deployment…"
   local ok=true
+  local external_reachable=true
 
   # Check Node API health
   if curl -sf http://127.0.0.1:${NODE_PORT}/health >/dev/null 2>&1; then
@@ -695,15 +703,25 @@ verify_deploy() {
   else
     warn "  ✗ Cannot reach ${PUBLIC_ORIGIN}/ from this machine"
     warn "    Possible causes:"
-    warn "    1. Firewall: run 'ufw status' and 'iptables -L -n | grep 80'"
+    warn "    1. HTTPS/TLS is not configured at Nginx or an upstream proxy"
     warn "    2. DNS: verify '${APP_HOST}' resolves correctly"
-    warn "    3. Cloud/GWDG security group: port 80 may need to be opened in the web console"
-    warn "    4. Browser cache: try Ctrl+Shift+R or incognito window"
-    ok=false
+    warn "    3. Firewall/GWDG security group: verify public ports 80 and 443"
+    warn "    4. The network does not support reaching the public address from this host"
+    external_reachable=false
+    if [[ "${REQUIRE_EXTERNAL_REACHABILITY}" == "1" ]]; then
+      warn "    External reachability is required by REQUIRE_EXTERNAL_REACHABILITY=1"
+      ok=false
+    else
+      warn "    Continuing because all host-local checks are authoritative for this deployment"
+    fi
   fi
 
   if [[ "${ok}" == "true" ]]; then
-    log "All checks passed!"
+    if [[ "${external_reachable}" == "true" ]]; then
+      log "All checks passed!"
+    else
+      log "All required local checks passed; external reachability remains unverified."
+    fi
   else
     warn "Deployment verification failed – see warnings above"
     return 1

@@ -36,8 +36,11 @@ The script installs packages, uses a dedicated `seshat` service account,
 creates PostgreSQL credentials under `/etc/seshat`, builds the SPA, applies
 committed Prisma migrations, writes hardened systemd units, configures only the
 Seshat Nginx site, enables runtime cleanup and daily database backup timers, and
-fails on unsuccessful deployment checks. It refuses to overwrite a dirty
-server checkout and only fast-forwards the selected branch.
+fails on unsuccessful host-local deployment checks. The public-origin check is
+advisory by default because TLS termination, split DNS, and network hairpinning
+can live outside the host. Set `REQUIRE_EXTERNAL_REACHABILITY=1` to make that
+check fatal. The script refuses to overwrite a dirty server checkout and only
+fast-forwards the selected branch.
 
 It does not change firewall rules, issue certificates, remove Caddy, or clear
 unrelated Nginx sites. If a stale Cloudsmith Caddy APT source alone breaks
@@ -51,6 +54,7 @@ APP_ROOT=/opt/seshat
 DATA_DIR=/var/lib/seshat
 CONFIG_DIR=/etc/seshat
 BACKUP_DIR=/var/backups/seshat
+REQUIRE_EXTERNAL_REACHABILITY=0
 SESSION_RETENTION_DAYS=90
 SESHAT_JOB_TTL_SECONDS=21600
 SESHAT_MAX_UPLOAD_BYTES=62914560
