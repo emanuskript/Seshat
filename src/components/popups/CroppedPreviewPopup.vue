@@ -1,6 +1,6 @@
 <template>
   <Dialog :open="!!croppedImage" @update:open="handleOpenChange">
-    <DialogContent class="sm:max-w-4xl" @keydown.esc="$emit('close')">
+    <DialogContent class="sm:max-w-4xl">
       <DialogHeader>
         <DialogTitle>Cropped Image</DialogTitle>
         <DialogDescription>

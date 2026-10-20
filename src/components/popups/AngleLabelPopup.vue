@@ -3,6 +3,9 @@
     <DialogContent class="sm:max-w-2xl z-[60]" overlay-class="z-[60]">
       <DialogHeader>
         <DialogTitle>{{ title }}</DialogTitle>
+        <DialogDescription>
+          Choose an existing statistics class or create a new class for this measurement.
+        </DialogDescription>
       </DialogHeader>
 
       <div class="space-y-4 py-4">
@@ -52,6 +55,7 @@
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -66,6 +70,7 @@ export default {
   components: {
     Dialog,
     DialogContent,
+    DialogDescription,
     DialogFooter,
     DialogHeader,
     DialogTitle,

@@ -1,6 +1,6 @@
 <template>
   <Dialog :open="visible" @update:open="handleOpenChange">
-    <DialogContent class="sm:max-w-3xl" @keydown.esc="$emit('close')">
+    <DialogContent class="sm:max-w-3xl">
       <DialogHeader>
         <DialogTitle>{{ summary?.title || 'Statistics' }}</DialogTitle>
         <DialogDescription>

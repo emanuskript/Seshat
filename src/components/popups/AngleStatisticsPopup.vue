@@ -1,6 +1,6 @@
 <template>
   <Dialog :open="visible" @update:open="handleOpenChange">
-    <DialogContent class="sm:max-w-md" @keydown.esc="$emit('close')">
+    <DialogContent class="sm:max-w-md">
       <DialogHeader>
         <DialogTitle>Angle Statistics</DialogTitle>
         <DialogDescription>

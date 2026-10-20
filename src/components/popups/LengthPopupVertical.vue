@@ -1,8 +1,11 @@
 <template>
   <Dialog :open="visible" @update:open="handleOpenChange">
-    <DialogContent class="sm:max-w-lg" @keydown.esc="$emit('cancel')">
+    <DialogContent class="sm:max-w-lg">
       <DialogHeader>
         <DialogTitle>Select Vertical Measurement Type</DialogTitle>
+        <DialogDescription>
+          Choose the vertical manuscript feature represented by the band.
+        </DialogDescription>
       </DialogHeader>
 
       <div class="py-4">
@@ -33,6 +36,7 @@
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -45,6 +49,7 @@ export default {
   components: {
     Dialog,
     DialogContent,
+    DialogDescription,
     DialogFooter,
     DialogHeader,
     DialogTitle,

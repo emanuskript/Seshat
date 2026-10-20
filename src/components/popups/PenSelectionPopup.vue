@@ -1,6 +1,6 @@
 <template>
   <Dialog :open="visible" @update:open="handleOpenChange">
-    <DialogContent class="sm:max-w-md" @keydown.esc="$emit('cancel')">
+    <DialogContent class="sm:max-w-md">
       <DialogHeader>
         <DialogTitle>Select a Pen</DialogTitle>
         <DialogDescription>
