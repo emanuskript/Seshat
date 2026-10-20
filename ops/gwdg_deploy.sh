@@ -447,6 +447,7 @@ target="${BACKUP_DIR}/${APP_NAME}-\${stamp}.dump"
 /usr/bin/pg_dump --format=custom --file="\${target}"
 /usr/bin/find "${BACKUP_DIR}" -maxdepth 1 -type f -name '${APP_NAME}-*.dump' -mtime +${BACKUP_RETENTION_DAYS:-14} -delete
 EOF
+  chown root:"${SERVICE_GROUP}" "/usr/local/sbin/${APP_NAME}-db-backup"
   chmod 0750 "/usr/local/sbin/${APP_NAME}-db-backup"
 
   tee "/etc/systemd/system/${APP_NAME}-backup.service" >/dev/null <<EOF
