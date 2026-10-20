@@ -80,7 +80,7 @@ export const tourSteps = [
   {
     id: 'crop-tool',
     title: 'Crop and Annotate',
-    content: 'Crop an area for closer work. Annotations made in the crop return to the same location on the full image when you close it.',
+    content: 'Choose Crop page segment for closer annotation, or Crop & Count to box repeated letterforms and measure their aspect ratio and ink density.',
     target: '[data-tour-tool="crop"]',
     placement: 'right',
     icon: 'scissors',

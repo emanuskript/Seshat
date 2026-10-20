@@ -48,6 +48,7 @@ const emit = defineEmits([
   'clear-traces',
   'clear-angles',
   'clear-distances',
+  'clear-box-measurements',
   'clear-horizontal',
   'clear-vertical',
   'clear-all',
@@ -58,6 +59,7 @@ const emit = defineEmits([
   'export-tei',
   'export-text',
   'export-w3c',
+  'export-box-csv',
   'import-json',
   'add-images'
 ])
@@ -211,6 +213,11 @@ function handleFullPdfExport() {
               Export as Web Annotation
               <span class="ml-auto text-xs text-muted-foreground">W3C/IIIF</span>
             </DropdownMenuItem>
+            <DropdownMenuItem @click="emit('export-box-csv'); saveDropdownOpen = false">
+              <Icon name="table-properties" :size="16" class="mr-2" />
+              Crop & Count data
+              <span class="ml-auto text-xs text-muted-foreground">CSV</span>
+            </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuLabel>Import</DropdownMenuLabel>
             <DropdownMenuItem @click="emit('import-json'); saveDropdownOpen = false">
@@ -240,6 +247,7 @@ function handleFullPdfExport() {
             <DropdownMenuItem @click="emit('clear-traces'); clearDropdownOpen = false">Clear Traces</DropdownMenuItem>
             <DropdownMenuItem @click="emit('clear-angles'); clearDropdownOpen = false">Clear Angles</DropdownMenuItem>
             <DropdownMenuItem @click="emit('clear-distances'); clearDropdownOpen = false">Clear Distances</DropdownMenuItem>
+            <DropdownMenuItem @click="emit('clear-box-measurements'); clearDropdownOpen = false">Clear Crop & Count Boxes</DropdownMenuItem>
             <DropdownMenuItem @click="emit('clear-horizontal'); clearDropdownOpen = false">Clear Horizontal Bands</DropdownMenuItem>
             <DropdownMenuItem @click="emit('clear-vertical'); clearDropdownOpen = false">Clear Vertical Bands</DropdownMenuItem>
             <DropdownMenuSeparator />

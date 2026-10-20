@@ -3,7 +3,7 @@
 // Handles export/import for JSON, TEI XML, Plain Text, W3C Web Annotation
 // ============================================================
 
-export const SCHEMA_VERSION = '1.0.0'
+export const SCHEMA_VERSION = '1.1.0'
 export const MAX_FILE_SIZE = 10 * 1024 * 1024 // 10MB
 
 // ============================================================
@@ -48,6 +48,7 @@ function normalizeAnnotations(annotations) {
     traces: [],
     angles: [],
     distances: [],
+    boxMeasurements: [],
     horizontalBands: [],
     verticalBands: []
   }
@@ -117,6 +118,55 @@ export function exportAsJson(annotations, metadata, settings, documentName) {
   const json = JSON.stringify(data, null, 2)
   const filename = generateFilename(documentName, 'json')
   downloadFile(json, filename, 'application/json')
+}
+
+function csvCell(value) {
+  const text = String(value ?? '')
+  return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text
+}
+
+export function buildBoxMeasurementsCsv(annotations) {
+  const boxes = normalizeAnnotations(annotations).boxMeasurements
+  const headers = [
+    'id', 'class', 'name', 'page', 'page_index', 'x', 'y', 'x2', 'y2', 'width', 'height',
+    'aspect_ratio_w_h', 'ink_density_percent', 'dark_pixels', 'sampled_pixels',
+    'threshold_method', 'threshold', 'algorithm_version', 'image_width', 'image_height', 'created_at'
+  ]
+  const rows = boxes.map(box => {
+    const x = Number(box.x) || 0
+    const y = Number(box.y) || 0
+    const width = Number(box.width) || 0
+    const height = Number(box.height) || 0
+    return [
+      box.id,
+      box.label || 'Unlabeled',
+      box.name || '',
+      (Number(box.pageIndex) || 0) + 1,
+      Number(box.pageIndex) || 0,
+      formatNum(x),
+      formatNum(y),
+      formatNum(x + width),
+      formatNum(y + height),
+      formatNum(width),
+      formatNum(height),
+      formatNum(box.aspectRatio, 6),
+      formatNum((Number(box.inkDensity) || 0) * 100, 4),
+      Number(box.darkPixelCount) || 0,
+      Number(box.sampledPixelCount) || 0,
+      box.thresholdMethod || 'otsu',
+      Number(box.threshold) || 0,
+      box.algorithmVersion || '',
+      Number(box.imageWidth) || 0,
+      Number(box.imageHeight) || 0,
+      box.createdAt || '',
+    ].map(csvCell).join(',')
+  })
+  return [headers.join(','), ...rows].join('\n')
+}
+
+export function exportBoxMeasurementsAsCsv(annotations, documentName) {
+  const csv = buildBoxMeasurementsCsv(annotations)
+  downloadFile(csv, generateFilename(`${documentName || 'annotations'}_crop_count`, 'csv'), 'text/csv;charset=utf-8')
 }
 
 /**
@@ -213,7 +263,7 @@ export function buildTeiExport(annotations, metadata) {
 
   // Group annotations by page
   const pageGroups = {}
-  const annotationTypes = ['comments', 'highlights', 'underlines', 'traces', 'angles', 'distances', 'horizontalBands', 'verticalBands']
+  const annotationTypes = ['comments', 'highlights', 'underlines', 'traces', 'angles', 'distances', 'boxMeasurements', 'horizontalBands', 'verticalBands']
 
   annotationTypes.forEach(type => {
     (normalized[type] || []).forEach(ann => {
@@ -312,6 +362,21 @@ export function buildTeiExport(annotations, metadata) {
         })
       }
 
+      // Crop & Count box measurements
+      if (pageData.boxMeasurements?.length) {
+        pageData.boxMeasurements.forEach(box => {
+          const lrx = (Number(box.x) || 0) + (Number(box.width) || 0)
+          const lry = (Number(box.y) || 0) + (Number(box.height) || 0)
+          xml += `        <zone type="crop-count" ulx="${formatNum(box.x)}" uly="${formatNum(box.y)}" lrx="${formatNum(lrx)}" lry="${formatNum(lry)}">
+          <label>${escapeXml(box.label || 'Unlabeled')}</label>
+          <measure type="aspect-ratio" quantity="${formatNum(box.aspectRatio, 6)}" unit="w/h"/>
+          <measure type="ink-density" quantity="${formatNum((Number(box.inkDensity) || 0) * 100, 4)}" unit="percent"/>
+          <note type="ink-threshold" subtype="${escapeXml(box.thresholdMethod || 'otsu')}">${formatNum(box.threshold, 0)}</note>
+        </zone>
+`
+        })
+      }
+
       // Horizontal bands
       if (pageData.horizontalBands?.length) {
         pageData.horizontalBands.forEach(band => {
@@ -378,7 +443,7 @@ Total Pages: ${metadata.totalPages || 'Unknown'}
 
   // Group annotations by page
   const pageGroups = {}
-  const annotationTypes = ['comments', 'highlights', 'underlines', 'traces', 'angles', 'distances', 'horizontalBands', 'verticalBands']
+  const annotationTypes = ['comments', 'highlights', 'underlines', 'traces', 'angles', 'distances', 'boxMeasurements', 'horizontalBands', 'verticalBands']
 
   annotationTypes.forEach(type => {
     (normalized[type] || []).forEach(ann => {
@@ -397,6 +462,7 @@ Total Pages: ${metadata.totalPages || 'Unknown'}
     traces: 0,
     angles: 0,
     distances: 0,
+    boxMeasurements: 0,
     bands: 0
   }
 
@@ -493,6 +559,17 @@ ${'='.repeat(80)}
         text += '\n'
       }
 
+      if (pageData.boxMeasurements?.length) {
+        text += `CROP & COUNT MEASUREMENTS
+-------------------------
+`
+        pageData.boxMeasurements.forEach(box => {
+          text += `- ${box.label || 'Unlabeled'} at (${formatNum(box.x)}, ${formatNum(box.y)}) ${formatNum(box.width)}x${formatNum(box.height)} px: W/H ${formatNum(box.aspectRatio, 4)}, ink ${formatNum((Number(box.inkDensity) || 0) * 100, 2)}%\n`
+          totals.boxMeasurements++
+        })
+        text += '\n'
+      }
+
       // Bands
       const hasBands = pageData.horizontalBands?.length || pageData.verticalBands?.length
       if (hasBands) {
@@ -532,6 +609,7 @@ Total Annotations: ${totalCount}
 - Traces: ${totals.traces}
 - Angles: ${totals.angles}
 - Distances: ${totals.distances}
+- Crop & Count Boxes: ${totals.boxMeasurements}
 - Bands: ${totals.bands}
 `
 
@@ -729,6 +807,37 @@ export function buildWebAnnotationExport(annotations, metadata) {
         selector: {
           type: 'SvgSelector',
           value: `<svg xmlns="http://www.w3.org/2000/svg"><path d="${pathData}" fill="none" stroke="#7c3aed" stroke-width="1"/></svg>`
+        }
+      }
+    ))
+  })
+
+  // Crop & Count boxes -> classifying and describing a rectangular region
+  normalized.boxMeasurements.forEach(box => {
+    const canvasUrl = getCanvasUrl(metadata.iiifManifest, box.pageIndex ?? 0)
+    items.push(createAnnotation(
+      ['classifying', 'describing'],
+      [
+        {
+          type: 'TextualBody',
+          purpose: 'classifying',
+          value: box.label || 'Unlabeled',
+          format: 'text/plain'
+        },
+        {
+          type: 'TextualBody',
+          purpose: 'describing',
+          value: `W/H ${formatNum(box.aspectRatio, 6)}; ink density ${formatNum((Number(box.inkDensity) || 0) * 100, 4)}%; threshold ${formatNum(box.threshold, 0)} (${box.thresholdMethod || 'otsu'})`,
+          format: 'text/plain'
+        }
+      ],
+      {
+        type: 'SpecificResource',
+        source: canvasUrl,
+        selector: {
+          type: 'FragmentSelector',
+          conformsTo: 'http://www.w3.org/TR/media-frags/',
+          value: `xywh=${Math.round(box.x || 0)},${Math.round(box.y || 0)},${Math.round(box.width || 0)},${Math.round(box.height || 0)}`
         }
       }
     ))

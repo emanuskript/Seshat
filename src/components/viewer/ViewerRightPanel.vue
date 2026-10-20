@@ -16,7 +16,8 @@ const props = defineProps({
   showInCm: { type: Boolean, default: false },
   selectedAnnotation: { type: Object, default: null },
   angleLabels: { type: Array, default: () => [] },
-  distanceLabels: { type: Array, default: () => [] }
+  distanceLabels: { type: Array, default: () => [] },
+  boxMeasurementLabels: { type: Array, default: () => [] }
 })
 
 const emit = defineEmits([
@@ -28,6 +29,8 @@ const emit = defineEmits([
   'generate-bands-doc',
   'generate-angles',
   'generate-distances',
+  'generate-box-measurements',
+  'inspect-box-measurement',
   'reclassify-annotation'
 ])
 
@@ -42,6 +45,7 @@ const annotationIcons = {
   comment: 'message-square',
   angle: 'triangle',
   distance: 'ruler-dimension-line',
+  boxMeasurement: 'box-select',
   'length-h': 'ruler',
   'length-v': 'move-vertical'
 }
@@ -60,7 +64,9 @@ const classificationOptions = computed(() => {
   const type = props.selectedAnnotation?.type
   const configured = type === 'angle'
     ? props.angleLabels
-    : (type === 'distance' ? props.distanceLabels : [])
+    : (type === 'distance'
+      ? props.distanceLabels
+      : (type === 'boxMeasurement' ? props.boxMeasurementLabels : []))
   return uniqueMeasurementLabels([selectedClassification.value, ...configured])
 })
 
@@ -136,6 +142,7 @@ function typeLabel(type) {
     comment: 'Comment',
     angle: 'Angle',
     distance: 'Distance',
+    boxMeasurement: 'Crop & Count box',
     'length-h': 'Horizontal band',
     'length-v': 'Vertical band'
   }
@@ -181,7 +188,7 @@ function buildPropertyRows(annotationItem) {
     ['Page', String((data.pageIndex ?? props.currentPage) + 1)],
   ]
 
-  if (['highlight', 'underline', 'length-h', 'length-v'].includes(type)) {
+  if (['highlight', 'underline', 'boxMeasurement', 'length-h', 'length-v'].includes(type)) {
     rows.push(['X', formatNumber(data.x, ' px')])
     rows.push(['Y', formatNumber(data.y, ' px')])
     rows.push(['Width', formatNumber(data.width, ' px')])
@@ -217,6 +224,14 @@ function buildPropertyRows(annotationItem) {
     rows.push(['Distance', formatNumber(length, ' px')])
     if (data.label) rows.push(['Label', data.label])
     rows.push(['Points', String(pointCount(data))])
+  }
+
+  if (type === 'boxMeasurement') {
+    rows.push(['Class', normalizeMeasurementLabel(data.label)])
+    rows.push(['Aspect ratio (W/H)', formatNumber(data.aspectRatio)])
+    rows.push(['Ink density', formatNumber((Number(data.inkDensity) || 0) * 100, '%')])
+    rows.push(['Ink pixels', `${Number(data.darkPixelCount) || 0} / ${Number(data.sampledPixelCount) || 0}`])
+    rows.push(['Threshold', `${Number(data.threshold) || 0} (${data.thresholdMethod === 'manual' ? 'manual' : 'automatic'})`])
   }
 
   if (type === 'comment') {
@@ -330,7 +345,7 @@ function buildPropertyRows(annotationItem) {
             />
           </div>
 
-          <div v-if="selectedAnnotation.type === 'angle' || selectedAnnotation.type === 'distance'" class="property-section">
+          <div v-if="selectedAnnotation.type === 'angle' || selectedAnnotation.type === 'distance' || selectedAnnotation.type === 'boxMeasurement'" class="property-section">
             <label class="property-label" for="selected-measurement-class">Statistics class</label>
             <input
               id="selected-measurement-class"
@@ -345,6 +360,17 @@ function buildPropertyRows(annotationItem) {
             </datalist>
             <p class="property-help">Statistics group by this class; the display name is only a personal caption.</p>
           </div>
+
+          <Button
+            v-if="selectedAnnotation.type === 'boxMeasurement'"
+            variant="outline"
+            size="sm"
+            class="w-full justify-start"
+            @click="emit('inspect-box-measurement', selectedAnnotation)"
+          >
+            <Icon name="scan-search" :size="14" class="mr-2" />
+            Inspect ink mask and threshold
+          </Button>
 
           <div v-if="selectedAnnotation.type === 'comment'" class="property-section">
             <div class="property-label">Comment text</div>
@@ -437,6 +463,15 @@ function buildPropertyRows(annotationItem) {
           >
             <Icon name="ruler-dimension-line" :size="14" class="mr-2" />
             Distance Measurements
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            class="w-full justify-start"
+            @click="emit('generate-box-measurements')"
+          >
+            <Icon name="box-select" :size="14" class="mr-2" />
+            Crop & Count Measurements
           </Button>
         </div>
       </div>

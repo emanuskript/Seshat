@@ -30,6 +30,7 @@
         @clear-traces="clearTraces"
         @clear-angles="clearAngles"
         @clear-distances="clearDistances"
+        @clear-box-measurements="clearBoxMeasurements"
         @clear-horizontal="clearHorizontalLengths"
         @clear-vertical="clearVerticalLengths"
         @clear-all="showClearConfirmation = true"
@@ -40,6 +41,7 @@
         @export-tei="handleExportTei"
         @export-text="handleExportPlainText"
         @export-w3c="handleExportWebAnnotation"
+        @export-box-csv="handleExportBoxMeasurementsCsv"
         @import-json="showImportDialog = true"
         @add-images="$refs.addImagesInput.click()"
       />
@@ -56,7 +58,7 @@
         @open-horizontal="openHorizontalPopup"
         @open-vertical="openVerticalPopup"
         @open-statistics="showStatsPanel = true"
-        @start-crop="startCrop"
+        @start-crop="openCropModeChooser"
       />
     </aside>
 
@@ -75,6 +77,16 @@
         <span>Snap to axes</span>
         <small>Hold Shift for temporary snap</small>
       </label>
+
+      <div v-if="boxMeasurementModeActive" class="box-measurement-control" role="status">
+        <div>
+          <strong>Crop & Count: {{ activeBoxMeasurementLabel }}</strong>
+          <small>{{ boxMeasurementProcessing ? 'Analyzing original pixels…' : (boxMeasurementThresholdMode === 'manual' ? `Fixed threshold ${boxMeasurementThreshold}` : 'Automatic ink threshold') }}</small>
+        </div>
+        <button type="button" :disabled="boxMeasurementProcessing" @click="openCropModeChooser">Change</button>
+        <button type="button" @click="showBoxStatistics = true">Statistics</button>
+        <button type="button" class="primary" :disabled="boxMeasurementProcessing" @click="finishBoxMeasurementMode">Done</button>
+      </div>
 
       <!-- Hidden file input for adding more pages -->
       <input ref="addImagesInput" type="file" accept="image/*,application/pdf"
@@ -505,6 +517,45 @@
           </div>
         </div>
 
+        <!-- Crop & Count live box -->
+        <div
+          v-if="boxMeasurementModeActive && currentBoxMeasurement"
+          class="box-measurement box-measurement--live"
+          :style="boxMeasurementStyle(currentBoxMeasurement)"
+        >
+          <span>{{ activeBoxMeasurementLabel }}</span>
+        </div>
+
+        <!-- Crop & Count saved boxes -->
+        <div
+          v-for="(box, index) in currentPageBoxMeasurements"
+          :key="'box-measurement-' + (box.id || index)"
+          class="box-measurement"
+          :class="{
+            'annotation-interactive': !isAnyToolActive,
+            'is-selected': isSelectedAnnotation('boxMeasurement', box),
+            'annotation-flash': isAnnotationFlashing('boxMeasurement', box)
+          }"
+          :style="boxMeasurementStyle(box)"
+          :title="getAnnotationBankLabel('boxMeasurement', box, index)"
+          @click.stop="selectBoxMeasurementFromPage(box, index)"
+          @pointerenter="showAnnotationTooltip('boxMeasurement', box, index, $event)"
+          @pointermove="moveAnnotationTooltip($event)"
+          @pointerleave="hideAnnotationTooltip"
+        >
+          <span>{{ boxMeasurementOverlayLabel(box) }}</span>
+          <button
+            v-for="corner in boxResizeCorners"
+            v-show="isSelectedAnnotation('boxMeasurement', box) && !isAnyToolActive"
+            :key="corner"
+            type="button"
+            class="box-resize-handle"
+            :class="`box-resize-handle--${corner}`"
+            :aria-label="`Resize ${corner} corner`"
+            @pointerdown.stop.prevent="startBoxMeasurementResize(box, corner, $event)"
+          />
+        </div>
+
         <!-- Finalized Lengths - use percentage positioning -->
         <div
           v-for="(measurement, index) in currentPageLengthMeasurements"
@@ -762,6 +813,7 @@
         :selected-annotation="selectedAnnotationItem"
         :angle-labels="angleLabels"
         :distance-labels="distanceLabels"
+        :box-measurement-labels="boxMeasurementStatisticsLabels"
         @select-annotation="handleSelectAnnotation"
         @delete-annotation="handleDeleteAnnotation"
         @rename-annotation="renameAnnotation"
@@ -771,6 +823,8 @@
         @generate-bands-doc="calculateEntireDocument"
         @generate-angles="openAnglesFilterFromStats"
         @generate-distances="openDistancesFilterFromStats"
+        @generate-box-measurements="showBoxStatistics = true"
+        @inspect-box-measurement="openBoxMeasurementInspector"
       />
     </aside>
 
@@ -796,6 +850,35 @@
         @cancel-hold-reset="cancelHoldReset"
       />
     </footer>
+
+    <CropModeDialog
+      :open="showCropModeDialog"
+      :labels="boxMeasurementLabels"
+      :initial-label="activeBoxMeasurementLabel"
+      @update:open="showCropModeDialog = $event"
+      @crop-segment="startCrop"
+      @start-count="startBoxMeasurementMode"
+    />
+
+    <BoxStatisticsPopup
+      :visible="showBoxStatistics"
+      :rows="boxStatisticsRows"
+      :scope="boxStatisticsScope"
+      @close="showBoxStatistics = false"
+      @update:scope="boxStatisticsScope = $event"
+      @export-csv="handleExportBoxMeasurementsCsv"
+    />
+
+    <BoxMeasurementInspector
+      :visible="showBoxInspector"
+      :annotation="boxInspectorAnnotation"
+      :original-preview="boxInspectorOriginalPreview"
+      :mask-preview="boxInspectorMaskPreview"
+      :processing="boxInspectorProcessing"
+      @close="closeBoxMeasurementInspector"
+      @apply-threshold="applyBoxInspectorThreshold"
+      @use-automatic="applyBoxInspectorAutomaticThreshold"
+    />
 
     <!-- Angle Label Picker Popup -->
     <!-- Angle Label Popup -->
@@ -1401,6 +1484,9 @@ import PenSelectionPopup from "@/components/popups/PenSelectionPopup.vue";
 import AngleStatsPickerPopup from "@/components/popups/AngleStatsPickerPopup.vue";
 import StatisticsPopup from "@/components/popups/StatisticsPopup.vue";
 import TracePopup from "@/components/popups/TracePopup.vue";
+import CropModeDialog from "@/components/popups/CropModeDialog.vue";
+import BoxStatisticsPopup from "@/components/popups/BoxStatisticsPopup.vue";
+import BoxMeasurementInspector from "@/components/popups/BoxMeasurementInspector.vue";
 import {
   Dialog,
   DialogContent,
@@ -1428,7 +1514,8 @@ import {
   exportAsJson,
   exportAsTei,
   exportAsPlainText,
-  exportAsWebAnnotation
+  exportAsWebAnnotation,
+  exportBoxMeasurementsAsCsv
 } from "@/services/annotationExportService";
 import {
   PDF_EXPORT_SCOPE,
@@ -1447,6 +1534,13 @@ import {
   summarizeMeasurements,
   uniqueMeasurementLabels,
 } from "@/utils/measurementStatistics.mjs";
+import {
+  analyzeInkPixels,
+  buildInkMaskRgba,
+  calculateBoxAspectRatio,
+  normalizePixelBounds,
+  summarizeBoxMeasurements,
+} from "@/utils/inkDensity.mjs";
 import { useSession } from "@/composables/useSession";
 import { usePresence } from "@/composables/usePresence";
 import { useFollow } from "@/composables/useFollow";
@@ -1525,6 +1619,9 @@ export default {
     AngleStatsPickerPopup,
     StatisticsPopup,
     TracePopup,
+    CropModeDialog,
+    BoxStatisticsPopup,
+    BoxMeasurementInspector,
     ImageAdjustmentsPanel,
     MessageSquare,
     SlidersHorizontal,
@@ -1728,6 +1825,17 @@ export default {
       isMeasuring: false, // length-bands creation
       croppingStarted: false,
       cropButtonClicked: false,
+      showCropModeDialog: false,
+      boxMeasurementModeActive: false,
+      boxMeasurementStart: null,
+      currentBoxMeasurement: null,
+      activeBoxMeasurementLabel: '',
+      boxMeasurementLabels: [],
+      boxMeasurementThresholdMode: 'automatic',
+      boxMeasurementThreshold: 128,
+      boxMeasurementProcessing: false,
+      boxResizeState: null,
+      boxResizeCorners: ['nw', 'ne', 'se', 'sw'],
 
       // Measurement units
       showMeasurementsInCm: false,
@@ -1798,6 +1906,15 @@ export default {
       distanceStatisticsApproximateCount: 0,
       showDistanceStatistics: false,
 
+      // Crop & Count statistics and mask inspector
+      showBoxStatistics: false,
+      boxStatisticsScope: 'page',
+      showBoxInspector: false,
+      boxInspectorAnnotation: null,
+      boxInspectorOriginalPreview: '',
+      boxInspectorMaskPreview: '',
+      boxInspectorProcessing: false,
+
       // Bands
       showHorizontalPopup: false,
       showVerticalPopup: false,
@@ -1851,6 +1968,7 @@ export default {
       draggedLabelIndex: null,
       labelDragOffset: { x: 0, y: 0 },
       _rectMovePersistTimer: null,
+      _boxRecalculateTimer: null,
 
       // Popups and stats
       showStatistics: false,
@@ -2000,20 +2118,21 @@ export default {
     isAnyToolActive() {
       return this.traceModeActive || this.highlightModeActive || this.underlineModeActive ||
              this.measureModeActive || this.distanceModeActive || this.isMeasuring || this.moveModeActive ||
-             this.lengthMeasurementActive || this.croppingStarted || this.commentModeActive;
+             this.lengthMeasurementActive || this.croppingStarted || this.boxMeasurementModeActive || this.commentModeActive;
     },
 
     toolSwitchLocked() {
       if (!this.isOperationInProgress) return false;
       return !!this.currentStroke ||
              !!this.moveStartPos ||
+             !!this.boxResizeState ||
              this.draggingPoint !== -1 ||
              (!!this.startPoint && (
                !!this.currentSquare ||
                !!this.currentUnderline ||
                this.lengthMeasurementActive ||
                this.croppingStarted
-             ));
+             )) || (!!this.boxMeasurementStart && !!this.currentBoxMeasurement);
     },
 
     // Active tool for toolbar highlighting
@@ -2029,7 +2148,7 @@ export default {
         const isHorizontal = ['ascenders', 'descenders', 'interlinear', 'upperMargin', 'lowerMargin', 'lineHeight', 'minimumHeight', 'other_h'].includes(label);
         return isHorizontal ? 'horizontal' : 'vertical';
       }
-      if (this.croppingStarted) return 'crop';
+      if (this.croppingStarted || this.boxMeasurementModeActive) return 'crop';
       return '';
     },
 
@@ -2037,7 +2156,7 @@ export default {
     currentPageAnnotationsList() {
       const list = [];
       let fallbackOrder = 0;
-      const typeIndexes = { highlight: 0, underline: 0, trace: 0, angle: 0, distance: 0 };
+      const typeIndexes = { highlight: 0, underline: 0, trace: 0, angle: 0, distance: 0, boxMeasurement: 0 };
       const addItem = (item, annotation) => {
         list.push({
           ...item,
@@ -2235,6 +2354,9 @@ export default {
              this.showVerticalPopup || 
              this.showAngleStatistics || 
              this.showDistanceStatistics ||
+             this.showCropModeDialog ||
+             this.showBoxStatistics ||
+             this.showBoxInspector ||
              this.showStatistics || 
              this.showClearConfirmation || 
              !!this.croppedImage ||
@@ -2256,6 +2378,9 @@ export default {
     },
     currentPageUnderlines() {
       return (this.annotationsByPage[this.currentPage] || []).filter(a => a.type === "underline");
+    },
+    currentPageBoxMeasurements() {
+      return (this.annotationsByPage[this.currentPage] || []).filter(a => a.type === 'boxMeasurement');
     },
     currentPageStrokes() {
       const strokes = (this.annotationsByPage[this.currentPage] || []).filter(a => a.type === "trace");
@@ -2349,6 +2474,23 @@ export default {
       );
       return uniqueMeasurementLabels(labels);
     },
+    boxMeasurementStatisticsLabels() {
+      const labels = this.annotationsByPage.flatMap(page =>
+        (page || []).filter(annotation => annotation?.type === 'boxMeasurement').map(annotation => annotation.label)
+      );
+      return uniqueMeasurementLabels([...this.boxMeasurementLabels, ...labels]);
+    },
+    boxStatisticsMeasurements() {
+      const pages = this.boxStatisticsScope === 'page'
+        ? [this.currentPage]
+        : Array.from({ length: Math.max(this.totalPages, this.annotationsByPage.length) }, (_, index) => index);
+      return pages.flatMap(pageIndex =>
+        (this.annotationsByPage[pageIndex] || []).filter(annotation => annotation?.type === 'boxMeasurement')
+      );
+    },
+    boxStatisticsRows() {
+      return summarizeBoxMeasurements(this.boxStatisticsMeasurements);
+    },
     currentPageLengthMeasurements() {
       const measurements = [];
       for (const label in this.lengthMeasurements) {
@@ -2397,6 +2539,17 @@ export default {
             title: `Distance (${label})`,
             subtitle: `${this.formatDistanceAnnotation(a, a.pageIndex ?? this.currentPage)}${creatorSuffix}`,
             color: "#7c3aed",
+          });
+          return;
+        }
+
+        if (a.type === 'boxMeasurement') {
+          items.push({
+            key: `a:${i}`,
+            category: 'boxMeasurement',
+            title: `Crop & Count (${normalizeMeasurementLabel(a.label)})`,
+            subtitle: `${Number(a.aspectRatio).toFixed(3)} W/H • ${((Number(a.inkDensity) || 0) * 100).toFixed(2)}% ink${creatorSuffix}`,
+            color: '#f97316',
           });
           return;
         }
@@ -2637,6 +2790,12 @@ export default {
       deep: true
     },
     distanceLabels: {
+      handler() {
+        this.queueSessionSettingsSync();
+      },
+      deep: true
+    },
+    boxMeasurementLabels: {
       handler() {
         this.queueSessionSettingsSync();
       },
@@ -2883,11 +3042,17 @@ export default {
     window.removeEventListener('pointermove', this.resizeSelectedBand);
     window.removeEventListener('pointerup', this.finishBandResize);
     window.removeEventListener('pointercancel', this.finishBandResize);
+    window.removeEventListener('pointermove', this.resizeBoxMeasurement);
+    window.removeEventListener('pointerup', this.finishBoxMeasurementResize);
+    window.removeEventListener('pointercancel', this.finishBoxMeasurementResize);
     if (this._angleMovePersistTimer) {
       clearTimeout(this._angleMovePersistTimer);
     }
     if (this._rectMovePersistTimer) {
       clearTimeout(this._rectMovePersistTimer);
+    }
+    if (this._boxRecalculateTimer) {
+      clearTimeout(this._boxRecalculateTimer);
     }
     if (this._bandResizePersistTimer) {
       clearTimeout(this._bandResizePersistTimer);
@@ -3023,6 +3188,20 @@ export default {
       });
       return this.mergeUniqueLabels(labels);
     },
+    collectBoxMeasurementLabelsFromAnnotations(annotations = null) {
+      const labels = [];
+      const add = annotation => {
+        if (annotation?.label) labels.push(annotation.label);
+      };
+      if (annotations && typeof annotations === 'object') {
+        (annotations.boxMeasurements || []).forEach(add);
+        return this.mergeUniqueLabels(labels);
+      }
+      (this.annotationsByPage || []).forEach(page => {
+        (page || []).filter(annotation => annotation?.type === 'boxMeasurement').forEach(add);
+      });
+      return this.mergeUniqueLabels(labels);
+    },
     addAngleLabelIfNeeded(label) {
       if (!String(label || '').trim()) return;
       const normalized = normalizeMeasurementLabel(label);
@@ -3060,6 +3239,10 @@ export default {
           ...this.distanceLabels,
           ...this.collectDistanceLabelsFromAnnotations()
         ]),
+        boxMeasurementLabels: this.mergeUniqueLabels([
+          ...this.boxMeasurementLabels,
+          ...this.collectBoxMeasurementLabelsFromAnnotations()
+        ]),
         angleLabelPositions: this.normalizePositionMap(this.angleLabelPositions),
         distanceLabelPositions: this.normalizePositionMap(this.distanceLabelPositions),
         labelPositions: this.normalizePositionMap(this.labelPositions),
@@ -3096,6 +3279,13 @@ export default {
 
       if (hasSetting('distanceLabelPositions') || annotations) {
         this.distanceLabelPositions = this.normalizePositionMap(safeSettings.distanceLabelPositions);
+      }
+
+      if (hasSetting('boxMeasurementLabels') || annotations) {
+        this.boxMeasurementLabels = this.mergeUniqueLabels([
+          ...(Array.isArray(safeSettings.boxMeasurementLabels) ? safeSettings.boxMeasurementLabels : []),
+          ...this.collectBoxMeasurementLabelsFromAnnotations(annotations)
+        ]);
       }
 
       if (hasSetting('labelPositions') || annotations) {
@@ -3295,6 +3485,8 @@ export default {
         this.showToolMessage(`${annotation.label} selected. Use arrow keys to move it; hold Shift for larger steps.`);
       } else if (type === 'distance') {
         this.showToolMessage(`${annotation.label} selected. Use arrow keys to move it; hold Shift for larger steps.`);
+      } else if (type === 'boxMeasurement') {
+        this.showToolMessage(`${annotation.label} selected. Use arrow keys to move it; inspect the counted mask in Properties.`);
       }
     },
     traceCenterlinePath(points = []) {
@@ -3358,6 +3550,7 @@ export default {
         underline: 'underlines',
         angle: 'measures',
         distance: 'distances',
+        boxMeasurement: 'boxMeasurements',
       };
       if (!target) return;
 
@@ -3414,11 +3607,11 @@ export default {
     reclassifyAnnotation(annotationItem, rawLabel) {
       const target = annotationItem?.data;
       const type = this.normalizeAnnotationDisplayType(annotationItem?.type);
-      if (!target || (type !== 'angle' && type !== 'distance')) return;
+      if (!target || !['angle', 'distance', 'boxMeasurement'].includes(type)) return;
 
       const label = normalizeMeasurementLabel(rawLabel);
       const pageIndex = Number.isInteger(target.pageIndex) ? target.pageIndex : this.currentPage;
-      const rawType = type === 'angle' ? 'measure' : 'distance';
+      const rawType = type === 'angle' ? 'measure' : type;
       const pageAnnotations = this.annotationsByPage[pageIndex] || [];
       const index = target.id
         ? pageAnnotations.findIndex(annotation => annotation?.type === rawType && annotation.id === target.id)
@@ -3429,6 +3622,7 @@ export default {
       pageAnnotations[index] = updatedAnnotation;
       if (type === 'angle') this.addAngleLabelIfNeeded(label);
       if (type === 'distance') this.addDistanceLabelIfNeeded(label);
+      if (type === 'boxMeasurement') this.addBoxMeasurementLabelIfNeeded(label);
 
       this.selectedAnnotationItem = {
         ...annotationItem,
@@ -3437,14 +3631,16 @@ export default {
       };
 
       if (this.sessionConnected && updatedAnnotation.id) {
-        this.syncUpdateAnnotation(type === 'angle' ? 'measures' : 'distances', updatedAnnotation.id, { label }, pageIndex);
+        const syncType = type === 'angle' ? 'measures' : (type === 'distance' ? 'distances' : 'boxMeasurements');
+        this.syncUpdateAnnotation(syncType, updatedAnnotation.id, { label }, pageIndex);
       } else if (this.activeSessionId) {
         this.queueSessionSnapshotSync();
       }
 
       this.refreshVisibleAngleStatistics();
       this.refreshVisibleDistanceStatistics();
-      this.showToolMessage(`${type === 'angle' ? 'Angle' : 'Distance'} class updated to “${label}”.`);
+      const typeName = type === 'angle' ? 'Angle' : (type === 'distance' ? 'Distance' : 'Crop & Count');
+      this.showToolMessage(`${typeName} class updated to “${label}”.`);
     },
 
     normalizeAnnotationDisplayType(type) {
@@ -3474,6 +3670,14 @@ export default {
         const measurement = this.formatDistanceAnnotation(annotation, pageIndex);
         if (annotation?.name) return `${annotation.name} • ${measurement} • ${classification}`;
         return `${classification} - ${measurement}`;
+      }
+      if (normalizedType === 'boxMeasurement') {
+        const classification = normalizeMeasurementLabel(annotation?.label);
+        const ratio = Number(annotation?.aspectRatio);
+        const density = Number(annotation?.inkDensity);
+        const metrics = `${Number.isFinite(ratio) ? ratio.toFixed(3) : '—'} W/H • ${Number.isFinite(density) ? `${(density * 100).toFixed(2)}%` : '—'} ink`;
+        if (annotation?.name) return `${annotation.name} • ${classification} • ${metrics}`;
+        return `${classification} • ${metrics}`;
       }
       if (normalizedType === 'length') {
         if (annotation?.name) return annotation.name;
@@ -3593,6 +3797,20 @@ export default {
           }
           break;
         }
+        case 'boxMeasurement': {
+          const boxes = pageAnnotations.filter(a => a.type === 'boxMeasurement');
+          const target = boxes[annotation.index];
+          if (target) {
+            const idx = pageAnnotations.indexOf(target);
+            if (idx !== -1) this.annotationsByPage[this.currentPage].splice(idx, 1);
+            if (target.id && this.sessionConnected) {
+              this.syncDeleteAnnotation('boxMeasurements', target.id, this.currentPage);
+            } else if (this.activeSessionId) {
+              this.queueSessionSnapshotSync();
+            }
+          }
+          break;
+        }
         case 'length-h':
         case 'length-v':
           this.deleteLengthMeasurement(annotation.id);
@@ -3660,14 +3878,19 @@ export default {
     },
 
     handleAngleMoveKeyDown(event) {
+      const target = event.target;
+      const tagName = target?.tagName?.toLowerCase();
+      if (target?.isContentEditable || ['input', 'textarea', 'select'].includes(tagName)) return;
+      if (event.key === 'Escape' && this.boxMeasurementModeActive) {
+        event.preventDefault();
+        this.finishBoxMeasurementMode();
+        return;
+      }
+
       const hasAngleSelection = this.keyboardMovingAngleId || this.keyboardMovingAngleRef;
       const hasRectSelection = this.isSelectedMovableRectAnnotation();
       const hasPointSelection = this.isSelectedMovablePointAnnotation();
       if (!hasAngleSelection && !hasRectSelection && !hasPointSelection) return;
-
-      const target = event.target;
-      const tagName = target?.tagName?.toLowerCase();
-      if (target?.isContentEditable || ['input', 'textarea', 'select'].includes(tagName)) return;
 
       if (event.key === 'Escape') {
         event.preventDefault();
@@ -3700,7 +3923,7 @@ export default {
 
     isSelectedMovableRectAnnotation() {
       const type = this.normalizeAnnotationDisplayType(this.selectedAnnotationItem?.type);
-      return type === 'highlight' || type === 'underline';
+      return type === 'highlight' || type === 'underline' || type === 'boxMeasurement';
     },
 
     isSelectedMovablePointAnnotation() {
@@ -3749,7 +3972,11 @@ export default {
         data: movedAnnotation,
       };
 
-      const syncTypes = { highlight: 'highlights', underline: 'underlines' };
+      const syncTypes = { highlight: 'highlights', underline: 'underlines', boxMeasurement: 'boxMeasurements' };
+      if (type === 'boxMeasurement') {
+        this.scheduleBoxMeasurementRecalculation(movedAnnotation);
+        return true;
+      }
       if (movedAnnotation.id && this.sessionConnected) {
         this.syncUpdateAnnotation(syncTypes[type], movedAnnotation.id, updates, pageIndex);
       } else if (this.activeSessionId) {
@@ -4963,12 +5190,15 @@ export default {
       this.isMeasuring = false;
       this.croppingStarted = false;
       this.cropButtonClicked = false;
+      this.boxMeasurementModeActive = false;
       this.isOperationInProgress = false;
 
       this.startPoint = null;
       this.currentSquare = null;
       this.currentUnderline = null;
       this.currentStroke = null;
+      this.boxMeasurementStart = null;
+      this.currentBoxMeasurement = null;
       this.moveStartPos = null;
       this.currentMoveDelta = { x: 0, y: 0 };
       this.measurePoints = [];
@@ -5716,6 +5946,14 @@ cancelPenSelection() {
       this.showToolMessage("Distances cleared.");
       this.showClearDropdown = false;
     },
+    clearBoxMeasurements() {
+      this.annotationsByPage[this.currentPage] = (this.annotationsByPage[this.currentPage] || [])
+        .filter(annotation => annotation.type !== 'boxMeasurement');
+      if (this.selectedAnnotationItem?.type === 'boxMeasurement') this.selectedAnnotationItem = null;
+      this.queueSessionSnapshotSync();
+      this.showToolMessage('Crop & Count boxes cleared.');
+      this.showClearDropdown = false;
+    },
     clearHorizontalLengths() {
       ["ascenders","descenders","interlinear","upperMargin","lowerMargin","lineHeight","minimumHeight","other_h"].forEach((t)=>{
         if (this.lengthMeasurements[t]) delete this.lengthMeasurements[t][this.currentPage];
@@ -5830,6 +6068,9 @@ cancelPenSelection() {
         distances: annotationsByPage.flatMap((page, pageIndex) =>
           (page || []).filter(a => a.type === 'distance').map(a => ({ ...a, pageIndex }))
         ),
+        boxMeasurements: annotationsByPage.flatMap((page, pageIndex) =>
+          (page || []).filter(a => a.type === 'boxMeasurement').map(a => ({ ...a, pageIndex }))
+        ),
         horizontalBands,
         verticalBands,
         settings: this.getSharedSessionSettings()
@@ -5900,6 +6141,21 @@ cancelPenSelection() {
       } catch (error) {
         console.error('W3C export failed:', error);
         this.showToolMessage('W3C export failed.');
+      }
+    },
+
+    handleExportBoxMeasurementsCsv() {
+      try {
+        const annotations = this.getAllAnnotations();
+        if (!annotations.boxMeasurements?.length) {
+          this.showToolMessage('No Crop & Count boxes to export.');
+          return;
+        }
+        exportBoxMeasurementsAsCsv(annotations, this.documentName);
+        this.showToolMessage(`Exported ${annotations.boxMeasurements.length} Crop & Count box${annotations.boxMeasurements.length === 1 ? '' : 'es'} as CSV.`);
+      } catch (error) {
+        console.error('Crop & Count CSV export failed:', error);
+        this.showToolMessage('Crop & Count CSV export failed.');
       }
     },
 
@@ -6071,10 +6327,14 @@ cancelPenSelection() {
         const isDistanceAnnotation =
           annotationType === 'distances' ||
           annotationType === 'distance';
+        const isBoxMeasurementAnnotation =
+          annotationType === 'boxMeasurements' ||
+          annotationType === 'boxMeasurement';
         const isPageAnnotation =
           annotationType === 'highlights' ||
           annotationType === 'underlines' ||
           annotationType === 'traces' ||
+          isBoxMeasurementAnnotation ||
           isDistanceAnnotation ||
           isAngleAnnotation;
         const commentChanged = annotationType === 'comments' && pageIndex === this.currentPage;
@@ -6091,6 +6351,7 @@ cancelPenSelection() {
           const next = { ...incoming, createdBy: participantId };
           if (isAngleAnnotation) next.type = 'measure';
           if (isDistanceAnnotation) next.type = 'distance';
+          if (isBoxMeasurementAnnotation) next.type = 'boxMeasurement';
           return next;
         };
 
@@ -6115,6 +6376,7 @@ cancelPenSelection() {
               }
               if (isAngleAnnotation) this.addAngleLabelIfNeeded(annotationWithCreator.label);
               if (isDistanceAnnotation) this.addDistanceLabelIfNeeded(annotationWithCreator.label);
+              if (isBoxMeasurementAnnotation) this.addBoxMeasurementLabelIfNeeded(annotationWithCreator.label);
             } else if (annotationType === 'comments') {
               if (!annotationWithCreator.id || !this.comments[pageIndex].some(c => c.id === annotationWithCreator.id)) {
                 this.comments[pageIndex].push(annotationWithCreator);
@@ -6141,6 +6403,7 @@ cancelPenSelection() {
                 };
                 if (isAngleAnnotation) this.addAngleLabelIfNeeded(updates?.label);
                 if (isDistanceAnnotation) this.addDistanceLabelIfNeeded(updates?.label);
+                if (isBoxMeasurementAnnotation) this.addBoxMeasurementLabelIfNeeded(updates?.label);
               }
             } else if (annotationType === 'comments') {
               const idx = this.comments[pageIndex].findIndex(a => a.id === annotationId);
@@ -6366,6 +6629,17 @@ cancelPenSelection() {
         });
       }
 
+      // Load Crop & Count box measurements
+      if (Array.isArray(annotations.boxMeasurements)) {
+        annotations.boxMeasurements.forEach(box => {
+          const pageIndex = box.pageIndex || 0;
+          if (!this.annotationsByPage[pageIndex]) this.annotationsByPage[pageIndex] = [];
+          const normalized = { ...box, type: 'boxMeasurement', label: normalizeMeasurementLabel(box.label) };
+          this.annotationsByPage[pageIndex].push(normalized);
+          this.addBoxMeasurementLabelIfNeeded(normalized.label);
+        });
+      }
+
       // Load bands into lengthMeasurements
       const loadBands = (bands) => {
         if (!bands) return;
@@ -6511,7 +6785,7 @@ cancelPenSelection() {
       const toolActive = (
         this.traceModeActive || this.measureModeActive || this.distanceModeActive || this.highlightModeActive ||
         this.underlineModeActive || this.lengthMeasurementActive || this.croppingStarted ||
-        this.commentModeActive || this.moveModeActive
+        this.boxMeasurementModeActive || this.commentModeActive || this.moveModeActive
       );
 
       // If no tool is active, let OpenSeadragon handle pan/zoom natively
@@ -6553,6 +6827,14 @@ cancelPenSelection() {
           };
           return;
         }
+        return;
+      }
+
+      // CROP START
+      if (this.boxMeasurementModeActive && !this.boxMeasurementProcessing) {
+        const { x, y } = this.getMousePosition(event);
+        this.boxMeasurementStart = { x, y };
+        this.currentBoxMeasurement = { x, y, width: 0, height: 0 };
         return;
       }
 
@@ -6702,6 +6984,17 @@ cancelPenSelection() {
           y: currentPos.y - this.moveStartPos.y,
         };
         return;
+      }
+
+      // CROP dynamic
+      if (this.boxMeasurementModeActive && this.boxMeasurementStart && this.currentBoxMeasurement) {
+        const { x, y } = this.getMousePosition(event);
+        this.currentBoxMeasurement = {
+          x: Math.min(x, this.boxMeasurementStart.x),
+          y: Math.min(y, this.boxMeasurementStart.y),
+          width: Math.abs(x - this.boxMeasurementStart.x),
+          height: Math.abs(y - this.boxMeasurementStart.y),
+        };
       }
 
       // CROP dynamic
@@ -6865,6 +7158,15 @@ cancelPenSelection() {
           this.queueSessionSnapshotSync();
         }
         if (editedAnnotation) this.refreshVisibleAngleStatistics();
+      }
+
+      // CROP finalize
+      if (this.boxMeasurementModeActive && this.boxMeasurementStart && this.currentBoxMeasurement) {
+        const rect = { ...this.currentBoxMeasurement };
+        this.boxMeasurementStart = null;
+        this.currentBoxMeasurement = null;
+        this.finalizeBoxMeasurement(rect);
+        return;
       }
 
       // CROP finalize
@@ -7234,6 +7536,351 @@ cancelPenSelection() {
         this.scalingFactor = (this.baseFitWidth || img.width) / img.naturalWidth;
       }
       this.imageLoaded = true;
+    },
+    openCropModeChooser() {
+      if (this.toolSwitchLocked) return;
+      this.resetAnnotationToolState();
+      this.showCropModeDialog = true;
+    },
+    addBoxMeasurementLabelIfNeeded(label) {
+      const normalized = normalizeMeasurementLabel(label);
+      if (!this.boxMeasurementLabels.some(existing => measurementLabelsEqual(existing, normalized))) {
+        this.boxMeasurementLabels.push(normalized);
+      }
+    },
+    startBoxMeasurementMode(settings = {}) {
+      this.resetAnnotationToolState();
+      this.activeBoxMeasurementLabel = normalizeMeasurementLabel(settings.label);
+      this.boxMeasurementThresholdMode = settings.thresholdMode === 'manual' ? 'manual' : 'automatic';
+      this.boxMeasurementThreshold = Math.max(0, Math.min(255, Number(settings.threshold) || 0));
+      this.addBoxMeasurementLabelIfNeeded(this.activeBoxMeasurementLabel);
+      this.boxMeasurementModeActive = true;
+      this.showToolMessage(`Crop & Count “${this.activeBoxMeasurementLabel}”: draw boxes around examples. The tool stays active until Done.` , 5000);
+    },
+    finishBoxMeasurementMode() {
+      this.resetAnnotationToolState();
+      this.showToolMessage('Crop & Count finished.');
+    },
+    boxMeasurementStyle(box) {
+      const imageWidth = Number(this.osdImageWidth) || 1;
+      const imageHeight = Number(this.osdImageHeight) || 1;
+      return {
+        left: `${((Number(box?.x) || 0) / imageWidth) * 100}%`,
+        top: `${((Number(box?.y) || 0) / imageHeight) * 100}%`,
+        width: `${((Number(box?.width) || 0) / imageWidth) * 100}%`,
+        height: `${((Number(box?.height) || 0) / imageHeight) * 100}%`,
+        position: 'absolute',
+      };
+    },
+    boxMeasurementOverlayLabel(box) {
+      const ratio = Number(box?.aspectRatio);
+      const density = Number(box?.inkDensity);
+      return `${normalizeMeasurementLabel(box?.label)} · ${Number.isFinite(ratio) ? ratio.toFixed(2) : '—'} W/H · ${Number.isFinite(density) ? `${(density * 100).toFixed(1)}%` : '—'} ink`;
+    },
+    async loadExactImageForCanvas(url) {
+      const candidates = [url, this.buildExportImageProxyUrl(url)].filter((value, index, array) => value && array.indexOf(value) === index);
+      let lastError = null;
+      for (const candidate of candidates) {
+        let objectUrl = null;
+        try {
+          if (candidate.startsWith('data:') || candidate.startsWith('blob:')) {
+            return { image: await this.loadImageElementForCanvas(candidate), revoke: () => {} };
+          }
+          const response = await fetch(candidate, { mode: 'cors', cache: 'force-cache' });
+          if (!response.ok) throw new Error(`Image request failed (${response.status})`);
+          const blob = await response.blob();
+          if (blob.type && !blob.type.toLowerCase().startsWith('image/')) {
+            throw new Error(`Image response was ${blob.type}, not an image`);
+          }
+          objectUrl = URL.createObjectURL(blob);
+          const image = await this.loadImageElementForCanvas(objectUrl);
+          return { image, revoke: () => URL.revokeObjectURL(objectUrl) };
+        } catch (error) {
+          if (objectUrl) URL.revokeObjectURL(objectUrl);
+          lastError = error;
+        }
+      }
+      throw lastError || new Error('Could not load the selected source pixels');
+    },
+    async captureBoxMeasurementPixels(rect, pageIndex = this.currentPage, options = {}) {
+      const dimensions = this.imageDimensionsByPage[pageIndex] || {};
+      const imageWidth = Number(dimensions.width) || Number(rect?.imageWidth) || (pageIndex === this.currentPage ? Number(this.osdImageWidth) : 0);
+      const imageHeight = Number(dimensions.height) || Number(rect?.imageHeight) || (pageIndex === this.currentPage ? Number(this.osdImageHeight) : 0);
+      const bounds = normalizePixelBounds(rect, imageWidth, imageHeight);
+      if (bounds.width < 4 || bounds.height < 4) throw new Error('Draw a box at least 4 × 4 source pixels.');
+      if ((bounds.width * bounds.height) > 4000000) throw new Error('This box is too large to analyze. Draw a smaller region.');
+
+      const imageUrl = this.images[pageIndex];
+      if (!imageUrl) throw new Error('The page image is unavailable.');
+      const serviceId = extractServiceId(imageUrl);
+      const pageService = this.iiifPages[pageIndex]?.image?.service || (serviceId ? { id: serviceId } : null);
+      const regionUrl = pageService
+        ? buildRegionRequestUrl(pageService, this.imageInfoByPage[pageIndex], bounds)
+        : '';
+      const loaded = regionUrl
+        ? await this.loadExactImageForCanvas(regionUrl)
+        : await this.loadImageForCanvas(imageUrl);
+
+      try {
+        const canvas = document.createElement('canvas');
+        canvas.width = bounds.width;
+        canvas.height = bounds.height;
+        const context = canvas.getContext('2d', { willReadFrequently: true });
+        if (!context) throw new Error('Canvas pixel analysis is unavailable in this browser.');
+
+        if (regionUrl) {
+          context.drawImage(loaded.image, 0, 0, bounds.width, bounds.height);
+        } else {
+          const naturalWidth = loaded.image.naturalWidth || loaded.image.width;
+          const naturalHeight = loaded.image.naturalHeight || loaded.image.height;
+          const scaleX = imageWidth > 0 ? naturalWidth / imageWidth : 1;
+          const scaleY = imageHeight > 0 ? naturalHeight / imageHeight : 1;
+          context.drawImage(
+            loaded.image,
+            bounds.x * scaleX,
+            bounds.y * scaleY,
+            bounds.width * scaleX,
+            bounds.height * scaleY,
+            0,
+            0,
+            bounds.width,
+            bounds.height,
+          );
+        }
+
+        const imageData = context.getImageData(0, 0, bounds.width, bounds.height);
+        return {
+          bounds,
+          imageWidth,
+          imageHeight,
+          rgba: imageData.data,
+          originalPreview: options.includePreview ? canvas.toDataURL('image/png') : '',
+        };
+      } finally {
+        loaded.revoke?.();
+      }
+    },
+    buildBoxMaskPreview(capture, threshold) {
+      const canvas = document.createElement('canvas');
+      canvas.width = capture.bounds.width;
+      canvas.height = capture.bounds.height;
+      const context = canvas.getContext('2d');
+      const mask = buildInkMaskRgba(capture.rgba, threshold);
+      context.putImageData(new ImageData(mask, capture.bounds.width, capture.bounds.height), 0, 0);
+      return canvas.toDataURL('image/png');
+    },
+    async finalizeBoxMeasurement(rect) {
+      if (this.boxMeasurementProcessing) return;
+      this.boxMeasurementProcessing = true;
+      this.showToolMessage('Analyzing original image pixels…', 0);
+      try {
+        const capture = await this.captureBoxMeasurementPixels(rect, this.currentPage);
+        const threshold = this.boxMeasurementThresholdMode === 'manual' ? this.boxMeasurementThreshold : null;
+        const metrics = analyzeInkPixels(capture.rgba, { threshold });
+        const annotation = {
+          id: safeUUID(),
+          ...this.creationMetadata(),
+          type: 'boxMeasurement',
+          pageIndex: this.currentPage,
+          label: normalizeMeasurementLabel(this.activeBoxMeasurementLabel),
+          ...capture.bounds,
+          aspectRatio: calculateBoxAspectRatio(capture.bounds.width, capture.bounds.height),
+          ...metrics,
+          imageWidth: capture.imageWidth,
+          imageHeight: capture.imageHeight,
+          createdBy: this.localParticipant?.id || null,
+        };
+        if (!this.annotationsByPage[this.currentPage]) this.annotationsByPage[this.currentPage] = [];
+        this.annotationsByPage[this.currentPage].push(annotation);
+        this.addBoxMeasurementLabelIfNeeded(annotation.label);
+        const index = this.currentPageBoxMeasurements.length - 1;
+        this.selectedAnnotationItem = {
+          type: 'boxMeasurement',
+          label: this.getAnnotationBankLabel('boxMeasurement', annotation, index),
+          data: annotation,
+          index,
+        };
+        if (this.sessionConnected) this.syncAddAnnotation('boxMeasurements', annotation);
+        else if (this.activeSessionId) this.queueSessionSnapshotSync();
+        this.showToolMessage(`${annotation.label}: ${annotation.aspectRatio.toFixed(3)} W/H, ${(annotation.inkDensity * 100).toFixed(2)}% ink. Draw the next box or choose Done.`, 6000);
+      } catch (error) {
+        console.error('Crop & Count analysis failed:', error);
+        this.showToolMessage(`Crop & Count failed: ${error.message || 'could not read image pixels'}.`, 7000);
+      } finally {
+        this.boxMeasurementProcessing = false;
+        this.isOperationInProgress = false;
+      }
+    },
+    selectBoxMeasurementFromPage(box, index = 0) {
+      if (this.isAnyToolActive || !box) return;
+      const item = {
+        type: 'boxMeasurement',
+        label: this.getAnnotationBankLabel('boxMeasurement', box, index),
+        data: box,
+        index,
+      };
+      this.selectedAnnotationItem = item;
+      this.showToolMessage(`${item.label} selected. Use arrow keys to move it; inspect the mask in Properties.`);
+    },
+    startBoxMeasurementResize(box, corner, event) {
+      if (!box || !box.id || !this.boxResizeCorners.includes(corner)) return;
+      event.currentTarget?.setPointerCapture?.(event.pointerId);
+      this.isOperationInProgress = true;
+      this.boxResizeState = {
+        id: box.id,
+        pageIndex: box.pageIndex ?? this.currentPage,
+        corner,
+        startClientX: event.clientX,
+        startClientY: event.clientY,
+        original: {
+          x: Number(box.x) || 0,
+          y: Number(box.y) || 0,
+          width: Number(box.width) || 0,
+          height: Number(box.height) || 0,
+        },
+      };
+      window.addEventListener('pointermove', this.resizeBoxMeasurement);
+      window.addEventListener('pointerup', this.finishBoxMeasurementResize);
+      window.addEventListener('pointercancel', this.finishBoxMeasurementResize);
+    },
+    resizeBoxMeasurement(event) {
+      const state = this.boxResizeState;
+      if (!state) return;
+      const sourcePerScreenPixel = this.svgInverseScale || 1;
+      const dx = (event.clientX - state.startClientX) * sourcePerScreenPixel;
+      const dy = (event.clientY - state.startClientY) * sourcePerScreenPixel;
+      const original = state.original;
+      const maxWidth = Number(this.imageDimensionsByPage[state.pageIndex]?.width) || Number(this.osdImageWidth) || Infinity;
+      const maxHeight = Number(this.imageDimensionsByPage[state.pageIndex]?.height) || Number(this.osdImageHeight) || Infinity;
+      const minSize = 4;
+      let left = original.x;
+      let top = original.y;
+      let right = original.x + original.width;
+      let bottom = original.y + original.height;
+
+      if (state.corner.includes('w')) left = Math.max(0, Math.min(right - minSize, original.x + dx));
+      if (state.corner.includes('e')) right = Math.min(maxWidth, Math.max(left + minSize, original.x + original.width + dx));
+      if (state.corner.includes('n')) top = Math.max(0, Math.min(bottom - minSize, original.y + dy));
+      if (state.corner.includes('s')) bottom = Math.min(maxHeight, Math.max(top + minSize, original.y + original.height + dy));
+
+      const pageAnnotations = this.annotationsByPage[state.pageIndex] || [];
+      const index = pageAnnotations.findIndex(annotation => annotation?.type === 'boxMeasurement' && annotation.id === state.id);
+      if (index === -1) return;
+      const updated = {
+        ...pageAnnotations[index],
+        x: left,
+        y: top,
+        width: right - left,
+        height: bottom - top,
+        aspectRatio: calculateBoxAspectRatio(right - left, bottom - top),
+      };
+      pageAnnotations[index] = updated;
+      if (this.selectedAnnotationItem?.data?.id === updated.id) {
+        this.selectedAnnotationItem = {
+          ...this.selectedAnnotationItem,
+          label: this.getAnnotationBankLabel('boxMeasurement', updated, this.selectedAnnotationItem.index),
+          data: updated,
+        };
+      }
+    },
+    finishBoxMeasurementResize() {
+      const state = this.boxResizeState;
+      this.boxResizeState = null;
+      this.isOperationInProgress = false;
+      window.removeEventListener('pointermove', this.resizeBoxMeasurement);
+      window.removeEventListener('pointerup', this.finishBoxMeasurementResize);
+      window.removeEventListener('pointercancel', this.finishBoxMeasurementResize);
+      if (!state) return;
+      const annotation = (this.annotationsByPage[state.pageIndex] || [])
+        .find(item => item?.type === 'boxMeasurement' && item.id === state.id);
+      if (annotation) this.scheduleBoxMeasurementRecalculation(annotation);
+    },
+    async openBoxMeasurementInspector(item) {
+      const annotation = item?.data || item;
+      if (!annotation || annotation.type !== 'boxMeasurement') return;
+      this.boxInspectorAnnotation = annotation;
+      this.showBoxInspector = true;
+      await this.refreshBoxMeasurementInspector(annotation);
+    },
+    closeBoxMeasurementInspector() {
+      this.showBoxInspector = false;
+      this.boxInspectorAnnotation = null;
+      this.boxInspectorOriginalPreview = '';
+      this.boxInspectorMaskPreview = '';
+    },
+    async refreshBoxMeasurementInspector(annotation) {
+      this.boxInspectorProcessing = true;
+      try {
+        const capture = await this.captureBoxMeasurementPixels(annotation, annotation.pageIndex ?? this.currentPage, { includePreview: true });
+        this.boxInspectorOriginalPreview = capture.originalPreview;
+        this.boxInspectorMaskPreview = this.buildBoxMaskPreview(capture, annotation.threshold);
+      } catch (error) {
+        console.error('Could not prepare ink mask preview:', error);
+        this.showToolMessage(`Could not prepare mask preview: ${error.message}.`, 6000);
+      } finally {
+        this.boxInspectorProcessing = false;
+      }
+    },
+    scheduleBoxMeasurementRecalculation(annotation) {
+      clearTimeout(this._boxRecalculateTimer);
+      this._boxRecalculateTimer = setTimeout(() => {
+        const threshold = annotation.thresholdMethod === 'manual' ? annotation.threshold : null;
+        this.recalculateBoxMeasurement(annotation, threshold);
+      }, 300);
+    },
+    async recalculateBoxMeasurement(annotation, threshold = null) {
+      if (!annotation) return;
+      this.boxInspectorProcessing = true;
+      try {
+        const pageIndex = annotation.pageIndex ?? this.currentPage;
+        const capture = await this.captureBoxMeasurementPixels(annotation, pageIndex, { includePreview: this.showBoxInspector });
+        const metrics = analyzeInkPixels(capture.rgba, { threshold });
+        const pageAnnotations = this.annotationsByPage[pageIndex] || [];
+        const index = pageAnnotations.findIndex(item => item?.type === 'boxMeasurement' && item.id === annotation.id);
+        if (index === -1) return;
+        const updated = {
+          ...pageAnnotations[index],
+          ...capture.bounds,
+          aspectRatio: calculateBoxAspectRatio(capture.bounds.width, capture.bounds.height),
+          ...metrics,
+          imageWidth: capture.imageWidth,
+          imageHeight: capture.imageHeight,
+        };
+        pageAnnotations[index] = updated;
+        this.boxInspectorAnnotation = updated;
+        if (this.showBoxInspector) {
+          this.boxInspectorOriginalPreview = capture.originalPreview;
+          this.boxInspectorMaskPreview = this.buildBoxMaskPreview(capture, updated.threshold);
+        }
+        if (this.selectedAnnotationItem?.data?.id === updated.id) {
+          this.selectedAnnotationItem = {
+            ...this.selectedAnnotationItem,
+            label: this.getAnnotationBankLabel('boxMeasurement', updated, this.selectedAnnotationItem.index),
+            data: updated,
+          };
+        }
+        const updates = {
+          x: updated.x, y: updated.y, width: updated.width, height: updated.height,
+          aspectRatio: updated.aspectRatio, inkDensity: updated.inkDensity,
+          darkPixelCount: updated.darkPixelCount, sampledPixelCount: updated.sampledPixelCount,
+          thresholdMethod: updated.thresholdMethod, threshold: updated.threshold,
+          algorithmVersion: updated.algorithmVersion, imageWidth: updated.imageWidth, imageHeight: updated.imageHeight,
+        };
+        if (this.sessionConnected) this.syncUpdateAnnotation('boxMeasurements', updated.id, updates, pageIndex);
+        else if (this.activeSessionId) this.queueSessionSnapshotSync();
+        this.showToolMessage(`${updated.label} recalculated: ${(updated.inkDensity * 100).toFixed(2)}% ink.`);
+      } catch (error) {
+        console.error('Could not recalculate Crop & Count box:', error);
+        this.showToolMessage(`Could not recalculate box: ${error.message}.`, 6000);
+      } finally {
+        this.boxInspectorProcessing = false;
+      }
+    },
+    applyBoxInspectorThreshold(threshold) {
+      return this.recalculateBoxMeasurement(this.boxInspectorAnnotation, Number(threshold));
+    },
+    applyBoxInspectorAutomaticThreshold() {
+      return this.recalculateBoxMeasurement(this.boxInspectorAnnotation, null);
     },
     startCrop() {
       if (this.toolSwitchLocked) return;
@@ -8386,6 +9033,31 @@ cancelPenSelection() {
           return;
         }
 
+        if (annotation.type === 'boxMeasurement') {
+          const x = Number(annotation.x) || 0;
+          const y = Number(annotation.y) || 0;
+          const width = Number(annotation.width) || 0;
+          const height = Number(annotation.height) || 0;
+          ctx.strokeStyle = '#f97316';
+          ctx.fillStyle = 'rgba(249, 115, 22, 0.08)';
+          ctx.lineWidth = visual.lineWidth;
+          ctx.fillRect(x, y, width, height);
+          ctx.strokeRect(x, y, width, height);
+          this.drawExportLabel(
+            ctx,
+            this.boxMeasurementOverlayLabel(annotation),
+            Math.max(0, x),
+            Math.max(0, y - 30 * visual.websitePixel),
+            {
+              color: '#ffedd5',
+              background: 'rgba(0,0,0,0.76)',
+              border: '#f97316',
+              fontSize: visual.secondaryFontSize,
+            }
+          );
+          return;
+        }
+
         if (annotation.type === 'distance' && Array.isArray(annotation.points) && annotation.points.length >= 2) {
           const [start, end] = annotation.points;
           ctx.strokeStyle = '#7c3aed';
@@ -8676,6 +9348,7 @@ cancelPenSelection() {
       const traces = annotations.filter((annotation) => annotation?.type === 'trace');
       const angles = annotations.filter((annotation) => annotation?.type === 'measure');
       const distances = annotations.filter((annotation) => annotation?.type === 'distance');
+      const boxMeasurements = annotations.filter((annotation) => annotation?.type === 'boxMeasurement');
       const horizontalBands = bands.filter((band) => this.isHorizontalLabel(band?.label));
       const verticalBands = bands.filter((band) => !this.isHorizontalLabel(band?.label));
       const totalAnnotations = annotations.length + comments.length + bands.length;
@@ -8720,6 +9393,16 @@ cancelPenSelection() {
           'px'
         ),
         this.measurementRow(
+          'Crop & Count aspect ratio',
+          boxMeasurements.map(annotation => annotation.aspectRatio),
+          'W/H'
+        ),
+        this.measurementRow(
+          'Crop & Count ink density',
+          boxMeasurements.map(annotation => (Number(annotation.inkDensity) || 0) * 100),
+          '%'
+        ),
+        this.measurementRow(
           'Horizontal band height',
           horizontalBands.map((band) => this.annotationHeight(band)),
           'px'
@@ -8740,6 +9423,7 @@ cancelPenSelection() {
           { label: 'Traces', value: traces.length },
           { label: 'Angles', value: angles.length },
           { label: 'Distances', value: distances.length },
+          { label: 'Crop & Count', value: boxMeasurements.length },
           { label: 'Comments', value: comments.length },
           { label: 'Bands', value: bands.length },
         ],
@@ -9043,7 +9727,8 @@ cancelPenSelection() {
 }
 
 .highlight-rectangle.annotation-interactive,
-.underline-line.annotation-interactive {
+.underline-line.annotation-interactive,
+.box-measurement.annotation-interactive {
   pointer-events: auto !important;
   cursor: pointer;
 }
@@ -9054,7 +9739,8 @@ cancelPenSelection() {
 }
 
 .highlight-rectangle.is-selected,
-.underline-line.is-selected {
+.underline-line.is-selected,
+.box-measurement.is-selected {
   outline: 2px solid hsl(var(--primary));
   outline-offset: 3px;
   box-shadow: 0 0 0 4px hsl(var(--primary) / 0.18), 0 0 16px hsl(var(--primary) / 0.38);
@@ -9070,6 +9756,7 @@ cancelPenSelection() {
 
 .highlight-rectangle.annotation-flash,
 .underline-line.annotation-flash,
+.box-measurement.annotation-flash,
 .length-measurement.annotation-flash,
 .angle-label.annotation-flash,
 .distance-label.annotation-flash {
@@ -9077,6 +9764,48 @@ cancelPenSelection() {
   outline-offset: 3px;
   box-shadow: 0 0 0 5px rgb(250 204 21 / 0.35), 0 0 20px 8px rgb(250 204 21 / 0.65) !important;
 }
+
+.box-measurement {
+  box-sizing: border-box;
+  border: 2px solid #f97316;
+  background: rgb(249 115 22 / 0.08);
+  pointer-events: none;
+  z-index: 180;
+}
+.box-measurement > span {
+  position: absolute;
+  left: -2px;
+  bottom: calc(100% + 3px);
+  max-width: 280px;
+  overflow: hidden;
+  border: 1px solid rgb(249 115 22 / 0.8);
+  border-radius: 0.3rem;
+  background: rgb(17 24 39 / 0.86);
+  color: #ffedd5;
+  padding: 0.18rem 0.35rem;
+  font-size: 0.68rem;
+  font-weight: 650;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.box-measurement--live { border-style: dashed; background: rgb(249 115 22 / 0.15); }
+.box-resize-handle {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  border: 2px solid hsl(var(--background));
+  border-radius: 2px;
+  background: #f97316;
+  box-shadow: 0 0 0 1px rgb(17 24 39 / 0.5);
+  padding: 0;
+  pointer-events: auto;
+}
+.box-resize-handle--nw { left: -6px; top: -6px; cursor: nwse-resize; }
+.box-resize-handle--ne { right: -6px; top: -6px; cursor: nesw-resize; }
+.box-resize-handle--se { right: -6px; bottom: -6px; cursor: nwse-resize; }
+.box-resize-handle--sw { left: -6px; bottom: -6px; cursor: nesw-resize; }
 
 .annotation-overlay .drawing-layer .saved-angle-group.annotation-flash .angle-line {
   stroke: #facc15 !important;
@@ -9719,6 +10448,33 @@ body.cropped-popup-active *::-moz-selection {
   color: hsl(var(--muted-foreground));
   font-size: 0.7rem;
 }
+
+.box-measurement-control {
+  position: absolute;
+  top: 4rem;
+  left: 50%;
+  z-index: 950;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  transform: translateX(-50%);
+  padding: 0.45rem 0.55rem 0.45rem 0.75rem;
+  border: 1px solid hsl(var(--border));
+  border-radius: 0.625rem;
+  background: hsl(var(--card) / 0.97);
+  box-shadow: 0 4px 14px rgb(0 0 0 / 0.16);
+  color: hsl(var(--foreground));
+}
+.box-measurement-control div { display: grid; min-width: 11rem; }
+.box-measurement-control strong { font-size: 0.8rem; }
+.box-measurement-control small { color: hsl(var(--muted-foreground)); font-size: 0.68rem; }
+.box-measurement-control button {
+  border: 1px solid hsl(var(--border)); border-radius: 0.4rem; background: hsl(var(--background));
+  color: hsl(var(--foreground)); padding: 0.32rem 0.5rem; font-size: 0.72rem;
+}
+.box-measurement-control button:hover { background: hsl(var(--muted)); }
+.box-measurement-control button.primary { border-color: hsl(var(--primary)); background: hsl(var(--primary)); color: hsl(var(--primary-foreground)); }
+.box-measurement-control button:disabled { cursor: wait; opacity: 0.55; }
 
 /* Stage is a fixed viewport for the page; UI overlays sit on top via z-index */
 .pdf-viewer.stage {
