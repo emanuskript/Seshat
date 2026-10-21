@@ -46,10 +46,17 @@ fi
 WS_ORIGIN="${PUBLIC_ORIGIN/https:/wss:}"
 WS_ORIGIN="${WS_ORIGIN/http:/ws:}"
 REQUIRE_EXTERNAL_REACHABILITY="${REQUIRE_EXTERNAL_REACHABILITY:-0}"
+DISABLE_CONFLICTING_NGINX_SITES="${DISABLE_CONFLICTING_NGINX_SITES:-1}"
 
 if [[ "${REQUIRE_EXTERNAL_REACHABILITY}" != "0" \
   && "${REQUIRE_EXTERNAL_REACHABILITY}" != "1" ]]; then
   echo "ERROR: REQUIRE_EXTERNAL_REACHABILITY must be 0 or 1." >&2
+  exit 1
+fi
+
+if [[ "${DISABLE_CONFLICTING_NGINX_SITES}" != "0" \
+  && "${DISABLE_CONFLICTING_NGINX_SITES}" != "1" ]]; then
+  echo "ERROR: DISABLE_CONFLICTING_NGINX_SITES must be 0 or 1." >&2
   exit 1
 fi
 
@@ -524,6 +531,58 @@ EOF
 # ############################################################################
 # 9. Nginx
 # ############################################################################
+nginx_site_claims_app_host() {
+  local site_file="$1"
+
+  awk -v expected_host="${APP_HOST}" '
+    {
+      line = $0
+      sub(/[[:space:]]*#.*/, "", line)
+      if (line !~ /(^|[[:space:]])server_name[[:space:]]/) next
+      gsub(/;/, " ", line)
+      field_count = split(line, fields, /[[:space:]]+/)
+      for (field_index = 1; field_index <= field_count; field_index++) {
+        if (fields[field_index] == expected_host) found = 1
+      }
+    }
+    END { exit(found ? 0 : 1) }
+  ' "${site_file}"
+}
+
+disable_conflicting_nginx_sites() {
+  local enabled_site disabled_dir disabled_site own_site
+  local conflict_count=0
+  own_site="/etc/nginx/sites-enabled/${APP_NAME}.conf"
+  disabled_dir="/etc/nginx/sites-disabled-by-${APP_NAME}"
+
+  for enabled_site in /etc/nginx/sites-enabled/*; do
+    [[ -e "${enabled_site}" || -L "${enabled_site}" ]] || continue
+    [[ "${enabled_site}" == "${own_site}" ]] && continue
+    nginx_site_claims_app_host "${enabled_site}" || continue
+
+    conflict_count=$((conflict_count + 1))
+    if [[ "${DISABLE_CONFLICTING_NGINX_SITES}" != "1" ]]; then
+      warn "Conflicting Nginx site claims ${APP_HOST}: ${enabled_site}"
+      continue
+    fi
+
+    mkdir -p "${disabled_dir}"
+    disabled_site="${disabled_dir}/$(basename "${enabled_site}")"
+    if [[ -e "${disabled_site}" || -L "${disabled_site}" ]]; then
+      disabled_site="${disabled_site}.${BASHPID}"
+    fi
+    mv -- "${enabled_site}" "${disabled_site}"
+    warn "Archived conflicting Nginx site: ${enabled_site}"
+    warn "Restore it, if needed, by moving ${disabled_site} back into /etc/nginx/sites-enabled/."
+  done
+
+  if (( conflict_count > 0 )) && [[ "${DISABLE_CONFLICTING_NGINX_SITES}" != "1" ]]; then
+    echo "FATAL: another enabled Nginx site already owns APP_HOST=${APP_HOST}." >&2
+    echo "  Re-run with DISABLE_CONFLICTING_NGINX_SITES=1 to archive it recoverably." >&2
+    exit 1
+  fi
+}
+
 setup_nginx() {
   log "Configuring Nginx"
 
@@ -629,6 +688,7 @@ NGINXEOF
   sed -i "s|%%NODE_PORT%%|${NODE_PORT}|g"       "/etc/nginx/sites-available/${APP_NAME}.conf"
   sed -i "s|%%PY_PORT%%|${PY_PORT}|g"           "/etc/nginx/sites-available/${APP_NAME}.conf"
 
+  disable_conflicting_nginx_sites
   ln -sf "/etc/nginx/sites-available/${APP_NAME}.conf" "/etc/nginx/sites-enabled/${APP_NAME}.conf"
   nginx -t
 }

@@ -55,6 +55,7 @@ DATA_DIR=/var/lib/seshat
 CONFIG_DIR=/etc/seshat
 BACKUP_DIR=/var/backups/seshat
 REQUIRE_EXTERNAL_REACHABILITY=0
+DISABLE_CONFLICTING_NGINX_SITES=1
 SESSION_RETENTION_DAYS=90
 SESHAT_JOB_TTL_SECONDS=21600
 SESHAT_MAX_UPLOAD_BYTES=62914560
@@ -68,6 +69,13 @@ ML_THREADS=2
 
 Do not raise worker or image limits without measuring peak memory. Gunicorn has
 a 600-second request timeout because analysis is synchronous.
+
+The deployment owns the exact hostname supplied in `APP_HOST`. By default, an
+older enabled Nginx site declaring that same hostname is moved to
+`/etc/nginx/sites-disabled-by-seshat/` before the generated Seshat site is
+enabled. The move is recoverable and prevents Nginx from silently serving a
+stale frontend. Set `DISABLE_CONFLICTING_NGINX_SITES=0` to stop instead and
+resolve any conflict manually.
 
 ## Database migration and capability links
 
